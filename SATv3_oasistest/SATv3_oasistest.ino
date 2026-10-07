@@ -92,7 +92,7 @@ const unsigned long TOUCH_POLL_MS = 25;
 // with the current global speed and easing curve.
 void ensureAttached(ServoEasing &servo, int pin, int parkAngle) {
   if (!servo.attached()) {
-    servo.attach(pin, parkAngle);   // attach AND write in one step: no jump to 90 degrees
+    servo.attach(pin, parkAngle);   // attach and write the start angle in one call
   }
   servo.setSpeed(servoSpeedDps);
   servo.setEasingType(SERVO_EASING);
@@ -778,7 +778,6 @@ void setup() {
 
   // On power-up: move once to OPEN angles, then detach to avoid
   // jitter while waiting on user input.
-  // (attach + write in one step, so nothing flicks to 90 degrees first)
   parkServo(s1, SERVO1_PIN, S1_OPEN_ANGLE);
   parkServo(s2, SERVO2_PIN, S2_OPEN_ANGLE);
   parkServo(s3, SERVO3_PIN, S3_OPEN_ANGLE);
