@@ -1,0 +1,4 @@
+# host simulation build products
+tests/host/sim
+tests/host/out/
+tests/host/build/
