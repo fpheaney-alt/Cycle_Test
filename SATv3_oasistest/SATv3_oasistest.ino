@@ -54,9 +54,58 @@ const int S3_OPEN_ANGLE   = 0;
 const int S3_CLOSED_ANGLE = 180;
 const int S4_OPEN_ANGLE   = 10;
 const int S4_CLOSED_ANGLE = 40;
-const int SERVO_SPEED_DEG_PER_SEC = 80;
+
+// Global servo speed. ONE value drives all four servos (average deg/sec over a move).
+// The user picks one of these presets on the Set Target screen.
+const int SPEED_PRESET_COUNT = 3;
+const int SPEED_PRESET_DPS[SPEED_PRESET_COUNT]          = {40, 80, 120};
+const char* const SPEED_PRESET_NAME[SPEED_PRESET_COUNT] = {"Slow", "Medium", "Fast"};
+const int DEFAULT_SPEED_PRESET = 1;   // Medium = 80 deg/sec, same as before
+int speedPreset   = DEFAULT_SPEED_PRESET;
+int servoSpeedDps = SPEED_PRESET_DPS[DEFAULT_SPEED_PRESET];
+
+// Easing curve used for every move. In/out easing ramps the speed up and down
+// instead of starting and stopping at full speed, which is much gentler on the
+// servos and the fixture. The preset speed above is the AVERAGE speed of a move
+// (peak is about 1.6x with sine). Use EASE_LINEAR to get the old constant-speed
+// moves back, or EASE_QUADRATIC_IN_OUT for a slightly cheaper curve.
+const uint_fast8_t SERVO_EASING = EASE_SINE_IN_OUT;
+
 // Global dwell at each end of travel for ALL servos (ms)
 const unsigned long SERVO_DWELL_MS = 1000;  // adjust to taste
+
+// How often the touch controller is polled over I2C (ms). Polling it flat out keeps
+// the I2C interrupt busy and delays the servo timer interrupt a few microseconds at
+// random, which shows up as servo jitter. 25 ms is still instant to the finger.
+const unsigned long TOUCH_POLL_MS = 25;
+
+// ---------------------------------------------------------------------------
+// Servo attach helpers
+// ---------------------------------------------------------------------------
+// ServoEasing::attach() always claims a NEW slot in its internal servo table and
+// never checks whether the servo is already attached. Calling it on an attached
+// servo leaks a slot (and the update interrupt then services the servo twice), and
+// after enough pause/resume taps the table is full and servos stop responding.
+// So: only ever attach a servo that is not currently attached.
+
+// Make sure the servo is attached (parked at parkAngle if it had to be attached),
+// with the current global speed and easing curve.
+void ensureAttached(ServoEasing &servo, int pin, int parkAngle) {
+  if (!servo.attached()) {
+    servo.attach(pin, parkAngle);   // attach AND write in one step: no jump to 90 degrees
+  }
+  servo.setSpeed(servoSpeedDps);
+  servo.setEasingType(SERVO_EASING);
+}
+
+// Attach if needed, cancel any move in progress, and put the servo at angle.
+// Cancelling first matters: otherwise the update interrupt keeps easing toward the
+// old target and drags the servo back out of position.
+void parkServo(ServoEasing &servo, int pin, int angle) {
+  ensureAttached(servo, pin, angle);
+  servo.stop();
+  servo.write(angle);
+}
 
 const int SCREEN_W = 480;
 const int SCREEN_H = 320;
@@ -284,11 +333,22 @@ void drawServoLabel(uint8_t index) {
   gfx.Print_String(buf, SERVO_LABEL_X + 4, y);
 }
 
+// Show the selected speed to the left of the Start/Pause button
+void drawSpeedInfo() {
+  gfx.Set_Text_Size(2);
+  gfx.Set_Text_Back_colour(C_BLACK);
+  gfx.Set_Text_colour(C_CYAN);
+  char buf[20];
+  sprintf(buf, "%s %d/s", SPEED_PRESET_NAME[speedPreset], servoSpeedDps);
+  gfx.Print_String(buf, 10, BTN_Y + BTN_H / 2 - 8);
+}
+
 void drawUI() {
   // Main cycling screen
   gfx.Fill_Screen(C_BLACK);
   drawHeader();
   drawCounters();
+  drawSpeedInfo();
   updateMainButton();
 }
 
@@ -308,9 +368,17 @@ const int SET_INDEF_Y = 210;
 const int SET_OK_X    = SCREEN_W - SET_MARGIN - SET_BTN_W;
 const int SET_OK_Y    = 210;
 
+// Speed preset row (Slow / Medium / Fast) along the bottom of the screen
+const int SET_SPEED_Y   = 270;
+const int SET_SPEED_H   = 40;
+const int SET_SPEED_GAP = (SCREEN_W - 2 * SET_MARGIN - SPEED_PRESET_COUNT * SET_BTN_W) / (SPEED_PRESET_COUNT - 1);
+
+int speedButtonX(int i) { return SET_MARGIN + i * (SET_BTN_W + SET_SPEED_GAP); }
+
 // Forward declarations for partial updates on the Set Target screen
 void updateTargetText();
 void updateIndefButton();
+void updateSpeedButtons();
 
 void drawSetTargetScreen() {
   gfx.Fill_Screen(C_BLACK);
@@ -343,6 +411,9 @@ void drawSetTargetScreen() {
 
   // Indefinite button (drawn via helper so we can toggle highlight only)
   updateIndefButton();
+
+  // Speed preset buttons (drawn via helper so we can move the highlight only)
+  updateSpeedButtons();
 
   // OK / Continue button
   gfx.Set_Draw_color(C_BLUE);
@@ -383,12 +454,30 @@ void updateIndefButton() {
   gfx.Print_String("Indefinite", SET_INDEF_X + 12, SET_INDEF_Y + 16);
 }
 
+// Redraw the three speed preset buttons; the selected one is highlighted green.
+void updateSpeedButtons() {
+  gfx.Set_Text_Size(2);
+  for (int i = 0; i < SPEED_PRESET_COUNT; i++) {
+    uint16_t fill = (i == speedPreset) ? C_GREEN : C_DKGRAY;
+    int x = speedButtonX(i);
+    gfx.Set_Draw_color(fill);
+    gfx.Fill_Round_Rectangle(x, SET_SPEED_Y, x + SET_BTN_W, SET_SPEED_Y + SET_SPEED_H, 8);
+    gfx.Set_Text_Back_colour(fill);
+    gfx.Set_Text_colour(C_WHITE);
+
+    char buf[16];
+    sprintf(buf, "%s %d", SPEED_PRESET_NAME[i], SPEED_PRESET_DPS[i]);
+    int textW = (int)strlen(buf) * 12;   // text size 2 = 12 px per character
+    gfx.Print_String(buf, x + (SET_BTN_W - textW) / 2, SET_SPEED_Y + (SET_SPEED_H - 16) / 2);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Generic helpers
 // ---------------------------------------------------------------------------
 
 unsigned long estimateServoMoveTime(int delta) {
-  return (unsigned long)(1000L * delta / SERVO_SPEED_DEG_PER_SEC);
+  return (unsigned long)(1000L * delta / servoSpeedDps);
 }
 
 bool getTouch(int16_t &x, int16_t &y) {
@@ -418,13 +507,11 @@ String command = Serial.readStringUntil('\n');
     command.trim();
     if (command.startsWith("S1 ")) {
       int angle = command.substring(3).toInt();
-      s1.attach(SERVO1_PIN);                       // ensure attached
-      s1.setSpeed(SERVO_SPEED_DEG_PER_SEC);
+      ensureAttached(s1, SERVO1_PIN, S1_OPEN_ANGLE);             // attach only if needed
       s1.easeTo(constrain(angle, 0, 180));
     } else if (command.startsWith("S2 ")) {
       int angle = command.substring(3).toInt();
-      s2.attach(SERVO2_PIN);                       // ensure attached
-      s2.setSpeed(SERVO_SPEED_DEG_PER_SEC);
+      ensureAttached(s2, SERVO2_PIN, S2_OPEN_ANGLE);             // attach only if needed
       s2.easeTo(constrain(angle, 0, 180));
     }
   }
@@ -479,6 +566,16 @@ void handleTouchSetTarget(int16_t tx, int16_t ty) {
     return;
   }
 
+  // Speed presets: one global speed for all four servos
+  for (int i = 0; i < SPEED_PRESET_COUNT; i++) {
+    if (inRect(tx, ty, speedButtonX(i), SET_SPEED_Y, SET_BTN_W, SET_SPEED_H)) {
+      speedPreset   = i;
+      servoSpeedDps = SPEED_PRESET_DPS[i];
+      updateSpeedButtons();
+      return;
+    }
+  }
+
   // Continue -> go to main cycling screen (no motion yet)
   if (inRect(tx, ty, SET_OK_X, SET_OK_Y, SET_BTN_W, SET_BTN_H)) {
     currentScreen = SCREEN_RUN;
@@ -496,11 +593,11 @@ void startCycleFromOpen() {
 
   // Pair (1 & 3) closing first, if either is active
   if (!servo1Paused) {
-    s1.startEaseTo(S1_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+    s1.startEaseTo(S1_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
     d1 = estimateServoMoveTime(abs(S1_CLOSED_ANGLE - S1_OPEN_ANGLE));
   }
   if (!servo3Paused) {
-    s3.startEaseTo(S3_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+    s3.startEaseTo(S3_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
     d3 = estimateServoMoveTime(abs(S3_CLOSED_ANGLE - S3_OPEN_ANGLE));
   }
 
@@ -508,11 +605,11 @@ void startCycleFromOpen() {
     // No active servos in pair (1 & 3); start with pair (2 & 4) instead.
     unsigned long d2 = 0, d4 = 0;
     if (!servo2Paused) {
-      s2.startEaseTo(S2_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+      s2.startEaseTo(S2_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
       d2 = estimateServoMoveTime(abs(S2_CLOSED_ANGLE - S2_OPEN_ANGLE));
     }
     if (!servo4Paused) {
-      s4.startEaseTo(S4_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+      s4.startEaseTo(S4_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
       d4 = estimateServoMoveTime(abs(S4_CLOSED_ANGLE - S4_OPEN_ANGLE));
     }
     moveDuration = (d2 > d4) ? d2 : d4;
@@ -537,22 +634,14 @@ void startNewTest() {
   updateCount4Display();
   updateMainButton();
 
-  // Re-attach servos when we actually start cycling
-  s1.attach(SERVO1_PIN);
-  s1.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s2.attach(SERVO2_PIN);
-  s2.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s3.attach(SERVO3_PIN);
-  s3.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s4.attach(SERVO4_PIN);
-  s4.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-
-  // First-run overshoot fix for all four servos:
-  // Sync logical and physical angles at OPEN before the first eased move.
-  s1.write(S1_OPEN_ANGLE);
-  s2.write(S2_OPEN_ANGLE);
-  s3.write(S3_OPEN_ANGLE);
-  s4.write(S4_OPEN_ANGLE);
+  // Re-attach servos when we actually start cycling, using the selected speed.
+  // parkServo() also syncs the logical and physical angle at OPEN before the first
+  // eased move (the first-run overshoot fix). Servos that were individually paused
+  // stay detached so they don't sit there buzzing.
+  if (!servo1Paused) parkServo(s1, SERVO1_PIN, S1_OPEN_ANGLE);
+  if (!servo2Paused) parkServo(s2, SERVO2_PIN, S2_OPEN_ANGLE);
+  if (!servo3Paused) parkServo(s3, SERVO3_PIN, S3_OPEN_ANGLE);
+  if (!servo4Paused) parkServo(s4, SERVO4_PIN, S4_OPEN_ANGLE);
   delay(20); // let the PWM settle for one frame
 
   // Begin the first cycle
@@ -564,14 +653,10 @@ void pauseAll() {
   paused = true;
 
   // Move all servos to OPEN (even if individually paused) and detach
-  s1.attach(SERVO1_PIN);
-  s1.write(S1_OPEN_ANGLE);
-  s2.attach(SERVO2_PIN);
-  s2.write(S2_OPEN_ANGLE);
-  s3.attach(SERVO3_PIN);
-  s3.write(S3_OPEN_ANGLE);
-  s4.attach(SERVO4_PIN);
-  s4.write(S4_OPEN_ANGLE);
+  parkServo(s1, SERVO1_PIN, S1_OPEN_ANGLE);
+  parkServo(s2, SERVO2_PIN, S2_OPEN_ANGLE);
+  parkServo(s3, SERVO3_PIN, S3_OPEN_ANGLE);
+  parkServo(s4, SERVO4_PIN, S4_OPEN_ANGLE);
   delay(20);
   s1.detach();
   s2.detach();
@@ -582,19 +667,12 @@ void pauseAll() {
 }
 
 void resumeAll() {
-  // Resume from global pause: ensure servos are at OPEN and restart cycle
-  s1.attach(SERVO1_PIN);
-  s1.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s1.write(S1_OPEN_ANGLE);
-  s2.attach(SERVO2_PIN);
-  s2.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s2.write(S2_OPEN_ANGLE);
-  s3.attach(SERVO3_PIN);
-  s3.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s3.write(S3_OPEN_ANGLE);
-  s4.attach(SERVO4_PIN);
-  s4.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s4.write(S4_OPEN_ANGLE);
+  // Resume from global pause: ensure servos are at OPEN and restart cycle.
+  // Individually paused servos stay detached.
+  if (!servo1Paused) parkServo(s1, SERVO1_PIN, S1_OPEN_ANGLE);
+  if (!servo2Paused) parkServo(s2, SERVO2_PIN, S2_OPEN_ANGLE);
+  if (!servo3Paused) parkServo(s3, SERVO3_PIN, S3_OPEN_ANGLE);
+  if (!servo4Paused) parkServo(s4, SERVO4_PIN, S4_OPEN_ANGLE);
   delay(20);
 
   paused = false;
@@ -621,18 +699,19 @@ void toggleServoPause(uint8_t index) {
   if (!(*flag)) {
     // Pause this servo: move to OPEN and detach
     *flag = true;
-    servo->attach(pin);
-    servo->setSpeed(SERVO_SPEED_DEG_PER_SEC);
-    servo->write(openAngle);
+    parkServo(*servo, pin, openAngle);
     delay(20);
     servo->detach();
   } else {
-    // Resume this servo: ensure at OPEN and leave attached for next cycle
+    // Resume this servo: ensure at OPEN and leave attached for next cycle.
+    // If the test isn't running (not started yet, or globally paused) there is no
+    // next cycle coming, so release it again instead of holding it energised.
     *flag = false;
-    servo->attach(pin);
-    servo->setSpeed(SERVO_SPEED_DEG_PER_SEC);
-    servo->write(openAngle);
+    parkServo(*servo, pin, openAngle);
     delay(20);
+    if (!started || paused) {
+      servo->detach();
+    }
   }
 
   // Redraw this servo's label to reflect paused/running state
@@ -699,21 +778,11 @@ void setup() {
 
   // On power-up: move once to OPEN angles, then detach to avoid
   // jitter while waiting on user input.
-  s1.attach(SERVO1_PIN);
-  s1.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s1.write(S1_OPEN_ANGLE);
-
-  s2.attach(SERVO2_PIN);
-  s2.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s2.write(S2_OPEN_ANGLE);
-
-  s3.attach(SERVO3_PIN);
-  s3.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s3.write(S3_OPEN_ANGLE);
-
-  s4.attach(SERVO4_PIN);
-  s4.setSpeed(SERVO_SPEED_DEG_PER_SEC);
-  s4.write(S4_OPEN_ANGLE);
+  // (attach + write in one step, so nothing flicks to 90 degrees first)
+  parkServo(s1, SERVO1_PIN, S1_OPEN_ANGLE);
+  parkServo(s2, SERVO2_PIN, S2_OPEN_ANGLE);
+  parkServo(s3, SERVO3_PIN, S3_OPEN_ANGLE);
+  parkServo(s4, SERVO4_PIN, S4_OPEN_ANGLE);
 
   delay(800);            // allow them to fully reach and settle at OPEN
                          // before we detach, to reduce any bounce/twitch
@@ -747,14 +816,23 @@ void setup() {
 void loop() {
   handleSerialCommands();
 
-  int16_t tx, ty;
-  if (getTouch(tx, ty)) {
-    handleTouch(tx, ty);
+  unsigned long now = millis();
+
+  // Poll the touch controller at a fixed rate instead of flat out (see TOUCH_POLL_MS)
+  static unsigned long lastTouchPoll = 0;
+  if (now - lastTouchPoll >= TOUCH_POLL_MS) {
+    lastTouchPoll = now;
+    int16_t tx, ty;
+    if (getTouch(tx, ty)) {
+      handleTouch(tx, ty);
+    }
   }
 
   if (!started || paused) return;
 
-  unsigned long now = millis();
+  // Re-read the clock: handling a touch can take a while (screen redraws, delays),
+  // and the state machine below compares against moveStartTime set during that time.
+  now = millis();
 
   switch (phase) {
     case S1_CLOSING:
@@ -763,11 +841,11 @@ void loop() {
         // Reverse direction for any unpaused servos in pair 1.
         unsigned long d1 = 0, d3 = 0;
         if (!servo1Paused) {
-          s1.startEaseTo(S1_OPEN_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s1.startEaseTo(S1_OPEN_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d1 = estimateServoMoveTime(abs(S1_OPEN_ANGLE - S1_CLOSED_ANGLE));
         }
         if (!servo3Paused) {
-          s3.startEaseTo(S3_OPEN_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s3.startEaseTo(S3_OPEN_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d3 = estimateServoMoveTime(abs(S3_OPEN_ANGLE - S3_CLOSED_ANGLE));
         }
         moveDuration = (d1 > d3) ? d1 : d3;
@@ -791,11 +869,11 @@ void loop() {
 
         unsigned long d2 = 0, d4 = 0;
         if (!servo2Paused) {
-          s2.startEaseTo(S2_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s2.startEaseTo(S2_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d2 = estimateServoMoveTime(abs(S2_CLOSED_ANGLE - S2_OPEN_ANGLE));
         }
         if (!servo4Paused) {
-          s4.startEaseTo(S4_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s4.startEaseTo(S4_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d4 = estimateServoMoveTime(abs(S4_CLOSED_ANGLE - S4_OPEN_ANGLE));
         }
         moveDuration = (d2 > d4) ? d2 : d4;
@@ -809,11 +887,11 @@ void loop() {
       if (now - moveStartTime >= moveDuration + SERVO_DWELL_MS) {
         unsigned long d2 = 0, d4 = 0;
         if (!servo2Paused) {
-          s2.startEaseTo(S2_OPEN_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s2.startEaseTo(S2_OPEN_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d2 = estimateServoMoveTime(abs(S2_OPEN_ANGLE - S2_CLOSED_ANGLE));
         }
         if (!servo4Paused) {
-          s4.startEaseTo(S4_OPEN_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+          s4.startEaseTo(S4_OPEN_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
           d4 = estimateServoMoveTime(abs(S4_OPEN_ANGLE - S4_CLOSED_ANGLE));
         }
         moveDuration = (d2 > d4) ? d2 : d4;
@@ -852,11 +930,11 @@ void loop() {
         } else {
           unsigned long d1 = 0, d3 = 0;
           if (!servo1Paused) {
-            s1.startEaseTo(S1_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+            s1.startEaseTo(S1_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
             d1 = estimateServoMoveTime(abs(S1_CLOSED_ANGLE - S1_OPEN_ANGLE));
           }
           if (!servo3Paused) {
-            s3.startEaseTo(S3_CLOSED_ANGLE, SERVO_SPEED_DEG_PER_SEC, START_UPDATE_BY_INTERRUPT);
+            s3.startEaseTo(S3_CLOSED_ANGLE, servoSpeedDps, START_UPDATE_BY_INTERRUPT);
             d3 = estimateServoMoveTime(abs(S3_CLOSED_ANGLE - S3_OPEN_ANGLE));
           }
           moveDuration = (d1 > d3) ? d1 : d3;
