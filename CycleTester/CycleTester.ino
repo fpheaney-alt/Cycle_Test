@@ -21,7 +21,8 @@ void setup() {
     Serial.println(F("Cycle Tester starting"));
   }
 
-  // The servos stay unpowered (no signal, limp) until you press START, so nothing moves at power-up.
+  // The servos get no signal (they stay limp) until you press START, or first jog / GO on the CALIBRATE
+  // screen, so nothing moves at power-up.
   controller.init();
   Ui::begin(controller);
 }

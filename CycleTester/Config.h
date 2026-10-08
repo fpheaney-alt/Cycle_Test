@@ -131,10 +131,15 @@ const bool USE_SAVED_CALIBRATION = true;
 // Jog buttons on the calibration screen, in microseconds: small, medium, large. With a 270 degree servo
 // 1 us is about 0.13 degrees, so the smallest button moves the arm by about an eighth of a degree.
 // (The servo's own dead band, about 2-3 us, is the limit of how finely the arm can really be placed.)
-const uint8_t CAL_STEP_US[3] = { 1, 5, 25 };
+constexpr uint8_t CAL_STEP_US[3] = { 1, 5, 25 };
 
 // The arm may never be set closer than this between its start and end (keeps a sweep from collapsing).
 const uint16_t CAL_MIN_SWEEP_US = 100;
+
+// A calibration move this small is written at once, so a held jog button follows your finger. A bigger
+// move (for example switching from the START row to the END row) glides at CAL_SLEW_US_PER_SEC instead,
+// so the arm never whips across the sweep. Keep it at least twice the largest CAL_STEP_US.
+const uint16_t CAL_DIRECT_MAX_US = 50;
 
 // How fast the arm glides when you press GO START / GO END, in microseconds per second
 // (600 us per second is roughly 80 degrees per second on a 270 degree servo).
@@ -142,6 +147,8 @@ const uint16_t CAL_SLEW_US_PER_SEC = 600;
 
 // Compile-time sanity checks. If one of these fires, the message says what to fix.
 constexpr bool pulseInLimits(int us) { return us >= SERVO_PULSE_MIN_US && us <= SERVO_PULSE_MAX_US; }
+constexpr int  absInt(int v) { return v < 0 ? -v : v; }
+constexpr bool sweepLongEnough(int startUs, int endUs) { return absInt(endUs - startUs) >= (int)CAL_MIN_SWEEP_US; }
 static_assert(SERVO_SPEED_DEG_PER_SEC >= 5 && SERVO_SPEED_DEG_PER_SEC <= 400,
               "SERVO_SPEED_DEG_PER_SEC must be between 5 and 400");
 static_assert(SERVO_FULL_TRAVEL_DEG == 180 || SERVO_FULL_TRAVEL_DEG == 270,
@@ -153,6 +160,11 @@ static_assert(SERVO_PULSE_MIN_US >= MINIMUM_PULSE_WIDTH && SERVO_PULSE_MAX_US <=
 static_assert(pulseInLimits(SERVO_START_US[0]) && pulseInLimits(SERVO_START_US[1]) && pulseInLimits(SERVO_START_US[2]) && pulseInLimits(SERVO_START_US[3]) &&
               pulseInLimits(SERVO_END_US[0])   && pulseInLimits(SERVO_END_US[1])   && pulseInLimits(SERVO_END_US[2])   && pulseInLimits(SERVO_END_US[3]),
               "Every SERVO_START_US / SERVO_END_US value must lie between SERVO_PULSE_MIN_US and SERVO_PULSE_MAX_US");
+static_assert(sweepLongEnough(SERVO_START_US[0], SERVO_END_US[0]) && sweepLongEnough(SERVO_START_US[1], SERVO_END_US[1]) &&
+              sweepLongEnough(SERVO_START_US[2], SERVO_END_US[2]) && sweepLongEnough(SERVO_START_US[3], SERVO_END_US[3]),
+              "Each servo's SERVO_START_US and SERVO_END_US must be at least CAL_MIN_SWEEP_US apart");
+static_assert(CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[0] && CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[1] && CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[2],
+              "CAL_DIRECT_MAX_US should be at least twice the largest CAL_STEP_US"); 
 
 // ===========================================================================
 // TEST SETUP SCREEN

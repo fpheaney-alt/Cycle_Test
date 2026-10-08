@@ -31,7 +31,8 @@ inline void delay(uint32_t ms) { simAdvanceUs((uint64_t)ms * 1000ULL); }
 inline void delayMicroseconds(unsigned int us) { simAdvanceUs(us); }
 
 inline void pinMode(uint8_t, uint8_t) {}
-inline void digitalWrite(uint8_t, uint8_t) {}
+extern uint8_t g_pinState[80];                       // last level written to each pin
+inline void digitalWrite(uint8_t pin, uint8_t level) { g_pinState[pin] = level; }
 inline void noInterrupts() {}
 inline void interrupts() {}
 

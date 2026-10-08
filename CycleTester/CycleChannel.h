@@ -40,9 +40,12 @@ class CycleChannel {
   void setEndpoints(int startUs, int endUs) { startUs_ = startUs; endUs_ = endUs; }
   bool calIdle() const      { return phase_ == PH_IDLE || phase_ == PH_CAL; }   // free to be calibrated
   bool calEnergized() const { return phase_ == PH_CAL; }                        // currently being driven for calibration
-  bool calJumpTo(int us, uint32_t now);    // switch the servo on if needed and put the arm at this pulse width now
-  bool calGlideTo(int us, uint32_t now);   // glide there at CAL_SLEW_US_PER_SEC
-  void calRelease();                       // stop sending a signal (the servo goes limp)
+  bool calMoveTo(int us, uint32_t now);    // switch the servo on if needed and move the arm to this pulse width:
+                                           //   small moves at once, big ones as a glide at CAL_SLEW_US_PER_SEC
+  bool calGlideTo(int us, uint32_t now);   // always glide
+  void calHome(uint32_t now);              // glide to the start position, then release (used when leaving calibration)
+  void calRelease();                       // stop sending a signal at once (the servo goes limp where it is)
+  void assumeAtStart() { restUs_ = startUs_; }   // at power-up: assume a limp arm was left at the start position
 
  private:
   enum Phase : uint8_t {
@@ -72,6 +75,7 @@ class CycleChannel {
   uint8_t  pin_ = 0;
   int      startUs_ = 1500, endUs_ = 1500;   // the ends of the sweep in use (factory, saved or just calibrated)
   int      mapStartUs_ = 0, mapEndUs_ = 0;    // the ends ServoEasing was attached with (its 0..180 degree scale)
+  int      restUs_ = 1500;                    // the pulse the arm was last left at when released (where a limp arm probably is)
 
   Phase    phase_ = PH_IDLE;
   bool     enabled_ = false;      // part of the current test
@@ -85,6 +89,7 @@ class CycleChannel {
   int      resumeDegree_ = 0;     // where an interrupted sweep was heading
   float    calUs_ = 0;            // calibration: pulse width being sent now
   int      calTargetUs_ = 0;      // calibration: pulse width it is gliding towards
+  bool     calHomePending_ = false;   // calibration: release as soon as the glide to the start arrives
   uint32_t calLastMs_ = 0;
 };
 
@@ -109,7 +114,8 @@ class CycleController {
   enum CalSource : uint8_t {
     CAL_FROM_CONFIG,      // using the factory values from Config.h
     CAL_FROM_SAVED,       // using values saved on the calibration screen
-    CAL_SAVED_IGNORED     // something was saved, but Config.h's servo settings changed since, so it was ignored
+    CAL_SAVED_IGNORED,    // something was saved, but Config.h's servo settings changed since, so it was ignored
+    CAL_SAVED_BAD         // something was saved but it is damaged, so the Config.h values are used
   };
   CalSource calSource() const { return calSource_; }
   bool calibrationAllowed() const;                               // no test running and no servo still moving
@@ -119,8 +125,10 @@ class CycleController {
   bool calSetDefaults(uint8_t index, uint32_t now);              // this servo back to the Config.h values
   void calReleaseAll();
   bool calDirty() const;                                         // differs from what is saved
+  bool calSaveEnabled() const { return USE_SAVED_CALIBRATION; }  // false: Config.h says to ignore saved values, so do not store any
   bool calSave();                                                // write to EEPROM
-  void calDiscard();                                             // back to what is saved
+  void calDiscard();                                             // forget unsaved changes (values go back to what is saved)
+  void calFinish(uint32_t now);                                  // leave calibration: each switched-on servo glides to its start, then is released
 
  private:
   CycleChannel ch_[NUM_SERVOS];

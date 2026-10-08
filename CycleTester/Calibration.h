@@ -3,7 +3,8 @@
 // Values set on the CALIBRATE screen live in the Mega's EEPROM, so they survive power-off. They are stored
 // together with a signature of the servo settings in Config.h: if you edit those settings, the saved values
 // no longer apply and are ignored (so an edit to Config.h always takes effect, and values measured for one
-// configuration are never applied to another).
+// configuration are never applied to another). Two alternating copies are kept, so a power cut in the middle
+// of a save leaves the previous good copy intact.
 #pragma once
 #include <Arduino.h>
 #include "Config.h"

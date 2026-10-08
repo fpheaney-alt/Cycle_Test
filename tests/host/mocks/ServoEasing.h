@@ -34,6 +34,8 @@ class Servo {
     min8_ = (int8_t)((544 - minUs) / 4);      // int8_t overflow here is exactly the real library's behaviour
     max8_ = (int8_t)((2400 - maxUs) / 4);
     servoAttached_ = true;
+    lastWriteUs_ = 0;                          // a fresh attach has no previous pulse
+    heldMin_ = 100000; heldMax_ = -100000; firstHeld_ = -1; lastFrameUs_ = -1;
     return 0;
   }
   void detach() { servoAttached_ = false; }
@@ -53,6 +55,21 @@ class Servo {
     if (value > maxUs_) maxUs_ = value;
     writeCount_++;
   }
+  // The Servo library sends the value it holds once per 20 ms frame; values written and replaced within a frame
+  // never reach the servo. emitFrame() is called once per simulated frame and records what really went out.
+  void emitFrame() {
+    if (!servoAttached_) return;
+    int v = (int)lround(lastUs_);
+    if (firstHeld_ < 0) firstHeld_ = v;
+    if (v < heldMin_) heldMin_ = v;
+    if (v > heldMax_) heldMax_ = v;
+    if (lastFrameUs_ >= 0) { int step = abs(v - lastFrameUs_); if (step > maxStepUs_) maxStepUs_ = step; }
+    lastFrameUs_ = v;
+  }
+  int maxStepUs() const { return maxStepUs_; }            // largest change between two consecutive frames
+  int heldMinUs() const { return heldMin_; }              // lowest / highest pulse actually sent since attach
+  int heldMaxUs() const { return heldMax_; }
+  int firstHeldUs() const { return firstHeld_; }          // the first pulse actually sent after attach
   int clampMinUs() const { return 544 - min8_ * 4; }
   int clampMaxUs() const { return 2400 - max8_ * 4; }
 
@@ -62,6 +79,7 @@ class Servo {
   double lastUs_ = 0, maxSlewUsPerS_ = 0;
   uint64_t lastWriteUs_ = 0;
   int minUs_ = 100000, maxUs_ = -100000;
+  int maxStepUs_ = 0, heldMin_ = 100000, heldMax_ = -100000, firstHeld_ = -1, lastFrameUs_ = -1;
   unsigned long writeCount_ = 0;
 };
 
@@ -101,7 +119,8 @@ class ServoEasing : public Servo {
   double degrees() const { return curDeg_; }
   int minUs() const { return minUs_; }
   int maxUs() const { return maxUs_; }
-  void resetStats() { minUs_ = 100000; maxUs_ = -100000; maxSlewUsPerS_ = 0; moveStarts_ = 0; attachCount_ = 0; detachCount_ = 0; writeCount_ = 0; }
+  void resetStats() { minUs_ = 100000; maxUs_ = -100000; maxSlewUsPerS_ = 0; moveStarts_ = 0; attachCount_ = 0; detachCount_ = 0; writeCount_ = 0;
+                      maxStepUs_ = 0; heldMin_ = 100000; heldMax_ = -100000; firstHeld_ = -1; lastFrameUs_ = -1; }
   int attachCount() const { return attachCount_; }
   uint64_t attachedAtUs() const { return attachedAtUs_; }
   int detachCount() const { return detachCount_; }
@@ -115,6 +134,7 @@ class ServoEasing : public Servo {
   // The 20 ms timer interrupt: advance every moving servo.
   static void isrTick() {
     for (ServoEasing* s : all()) if (s->servoAttached_ && s->moves_) s->update();
+    for (ServoEasing* s : all()) s->emitFrame();
   }
 
  private:

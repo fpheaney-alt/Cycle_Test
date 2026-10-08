@@ -27,7 +27,8 @@ void CycleChannel::init(uint8_t index) {
   startUs_ = SERVO_START_US[index];
   endUs_   = SERVO_END_US[index];
   servo_.setEasingType(easingCode(SERVO_EASING));
-  // The servo is NOT attached yet, so it receives no signal and stays limp until a test starts.
+  // The servo is NOT attached yet, so it receives no signal and stays limp until a test starts
+  // (or until it is first moved on the calibration screen).
 }
 
 void CycleChannel::log(const __FlashStringHelper* what) const {
@@ -57,8 +58,11 @@ bool CycleChannel::ensureAttached() {
 
 void CycleChannel::release() {
   if (attached_) {
+    // Remember where the (now limp) arm is left: at the start after a test, wherever calibration put it otherwise.
+    restUs_ = (phase_ == PH_CAL) ? (int)(calUs_ + 0.5f) : mapStartUs_;
     servo_.stop();
     servo_.detach();
+    digitalWrite(pin_, LOW);        // Servo::detach() can leave the line HIGH if it lands in the middle of a pulse
     attached_ = false;
   }
 }
@@ -216,6 +220,11 @@ void CycleChannel::update(uint32_t now) {
         else                 { calUs_ -= step; if (calUs_ < target) calUs_ = target; }
         servo_.writeMicroseconds((int)(calUs_ + 0.5f));
       }
+      if (calHomePending_ && calUs_ == target) {    // arrived at the start after BACK: now let go
+        release();
+        phase_ = PH_IDLE;
+        calHomePending_ = false;
+      }
       break;
     }
 
@@ -232,26 +241,47 @@ void CycleChannel::update(uint32_t now) {
 bool CycleChannel::calEnergize(uint32_t now) {
   if (phase_ == PH_CAL) return true;
   if (phase_ != PH_IDLE) return false;              // a test is running, or the servo is still homing
-  if (!ensureAttached()) return false;              // the arm goes to the start pulse, since attach() writes position 0
+  if (!ensureAttached()) return false;
+  // attach() has just sent the start pulse. Replace it at once with the pulse the arm was last left at, so
+  // that switching a servo on does not make a limp arm swing anywhere.
+  servo_.writeMicroseconds(restUs_);
   phase_ = PH_CAL;
   calLastMs_ = now;
-  calUs_ = (float)startUs_;
-  calTargetUs_ = startUs_;
+  calUs_ = (float)restUs_;
+  calTargetUs_ = restUs_;
+  calHomePending_ = false;
   return true;
 }
 
-bool CycleChannel::calJumpTo(int us, uint32_t now) {
+// Small corrections go out at once so that a held jog button follows your finger. A big move (switching from
+// the START row to the END row, say) glides instead, so the arm is never whipped across the sweep.
+bool CycleChannel::calMoveTo(int us, uint32_t now) {
   if (!calEnergize(now)) return false;
-  calUs_ = (float)us;
-  calTargetUs_ = us;
-  servo_.writeMicroseconds(us);
+  calHomePending_ = false;
+  int distance = us - (int)(calUs_ + 0.5f);
+  if (distance < 0) distance = -distance;
+  if (distance <= (int)CAL_DIRECT_MAX_US) {
+    calUs_ = (float)us;
+    calTargetUs_ = us;
+    servo_.writeMicroseconds(us);
+  } else {
+    calTargetUs_ = us;                              // update() glides there
+  }
   return true;
 }
 
 bool CycleChannel::calGlideTo(int us, uint32_t now) {
   if (!calEnergize(now)) return false;
+  calHomePending_ = false;
   calTargetUs_ = us;
   return true;
+}
+
+void CycleChannel::calHome(uint32_t now) {
+  (void)now;
+  if (phase_ != PH_CAL) return;
+  calTargetUs_ = startUs_;
+  calHomePending_ = true;
 }
 
 void CycleChannel::calRelease() {
@@ -276,15 +306,20 @@ void CycleController::init() {
     switch (Calibration::load(stored)) {
       case Calibration::LOAD_OK:             saved_ = stored; calSource_ = CAL_FROM_SAVED; break;
       case Calibration::LOAD_CONFIG_CHANGED: calSource_ = CAL_SAVED_IGNORED; break;
+      case Calibration::LOAD_BAD:            calSource_ = CAL_SAVED_BAD; break;
       default: break;
     }
   }
-  for (uint8_t i = 0; i < NUM_SERVOS; i++) ch_[i].setEndpoints(saved_.startUs[i], saved_.endUs[i]);
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) {
+    ch_[i].setEndpoints(saved_.startUs[i], saved_.endUs[i]);
+    ch_[i].assumeAtStart();
+  }
 
   if (SERIAL_LOG) {
     Serial.print(F("Servo end points: "));
     Serial.println(calSource_ == CAL_FROM_SAVED ? F("saved calibration") :
-                   calSource_ == CAL_SAVED_IGNORED ? F("Config.h (saved calibration ignored: Config.h changed)") : F("Config.h"));
+                   calSource_ == CAL_SAVED_IGNORED ? F("Config.h (saved calibration ignored: Config.h changed)") :
+                   calSource_ == CAL_SAVED_BAD ? F("Config.h (saved calibration is damaged)") : F("Config.h"));
   }
 }
 
@@ -373,7 +408,7 @@ bool CycleController::calJog(uint8_t index, bool jogEnd, int deltaUs, uint32_t n
     s += deltaUs;
     e += deltaUs;
     c.setEndpoints(s, e);
-    return c.calJumpTo(s, now);
+    return c.calMoveTo(s, now);
   }
 
   // END: move the end only, keeping it on the same side of the start and at least CAL_MIN_SWEEP_US away.
@@ -382,7 +417,7 @@ bool CycleController::calJog(uint8_t index, bool jogEnd, int deltaUs, uint32_t n
   if (dir * (ne - s) < (int)CAL_MIN_SWEEP_US) ne = clampInt(s + dir * (int)CAL_MIN_SWEEP_US, SERVO_PULSE_MIN_US, SERVO_PULSE_MAX_US);
   if (ne == e) return false;
   c.setEndpoints(s, ne);
-  return c.calJumpTo(ne, now);
+  return c.calMoveTo(ne, now);
 }
 
 bool CycleController::calGo(uint8_t index, bool toEnd, uint32_t now) {
@@ -426,5 +461,10 @@ bool CycleController::calSave() {
 
 void CycleController::calDiscard() {
   for (uint8_t i = 0; i < NUM_SERVOS; i++) ch_[i].setEndpoints(saved_.startUs[i], saved_.endUs[i]);
-  calReleaseAll();
+}
+
+// Leaving the calibration screen: a servo that is switched on glides to its start position (where a test
+// begins) and is released there, rather than being left limp wherever the last jog put it.
+void CycleController::calFinish(uint32_t now) {
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) ch_[i].calHome(now);
 }

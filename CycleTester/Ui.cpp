@@ -101,10 +101,10 @@ static void drawGlyph(int16_t x, int16_t y, char c, uint8_t scale, uint16_t fg, 
   for (uint8_t col = 0; col < 5; col++) {
     uint8_t bits = pgm_read_byte(glyph + col);
     uint8_t row = 0;
-    while (row < 7) {
+    while (row < 8) {                                         // 8 rows: the tails of g, j, p, q, y and the comma use the last one
       if (bits & (1 << row)) {
         uint8_t first = row;
-        while (row < 7 && (bits & (1 << row))) row++;     // merge a vertical run into one rectangle
+        while (row < 8 && (bits & (1 << row))) row++;         // merge a vertical run into one rectangle
         fillRect(x + col * scale, y + first * scale, scale, (row - first) * scale, fg);
       } else {
         row++;
@@ -278,7 +278,7 @@ static void drawEstimate() {
     formatDuration((uint64_t)longest * cycleMs / 1000, dur, sizeof(dur));
     snprintf(text, sizeof(text), "Est. run time %s", dur);
   }
-  drawField(setupEstimateField, 8, SETUP_EST_Y, 2, color, COL_BG, text, 22, ALIGN_LEFT);
+  drawField(setupEstimateField, 8, SETUP_EST_Y, 2, color, COL_BG, text, 31, ALIGN_LEFT);
 }
 
 static void drawSetupValue(uint8_t row) {
@@ -634,6 +634,7 @@ static void drawCalScreen() {
   uint32_t now = millis();        // taken after the (slow) redraw, so the message is on screen for its full time
   CycleController::CalSource src = ctl->calSource();
   if (src == CycleController::CAL_SAVED_IGNORED)    setCalMessage("Config changed, saved cal reset", COL_WARN, now, 8000);
+  else if (src == CycleController::CAL_SAVED_BAD)   setCalMessage("Saved cal damaged, factory used", COL_BAD, now, 8000);
   else if (src == CycleController::CAL_FROM_SAVED)  setCalMessage("Loaded saved calibration", COL_GOOD, now, 4000);
   else                                              drawCalStatus(now);
   inputBlockedUntil = millis() + 400;
@@ -785,8 +786,9 @@ static void perform(Action a, uint32_t now) {
     drawCalStatus(now);
 
   } else if (a == ACT_CAL_SAVE) {
-    if (ctl->calSave()) setCalMessage("Saved", COL_GOOD, now, 2500);
-    else                setCalMessage("SAVE FAILED", COL_BAD, now, 4000);
+    if (!ctl->calSaveEnabled())  setCalMessage("Saving is off in Config.h", COL_BAD, now, 4000);
+    else if (ctl->calSave())     setCalMessage("Saved", COL_GOOD, now, 2500);
+    else                         setCalMessage("SAVE FAILED", COL_BAD, now, 4000);
 
   } else if (a == ACT_CAL_BACK) {
     if (ctl->calDirty() && !(calDiscardPending && (int32_t)(now - calDiscardUntil) < 0)) {
@@ -797,7 +799,7 @@ static void perform(Action a, uint32_t now) {
     } else {
       calDiscardPending = false;
       if (ctl->calDirty()) ctl->calDiscard();
-      ctl->calReleaseAll();
+      ctl->calFinish(now);                          // a switched-on servo glides to its start position and is released there
       drawButton(CAL_BACK_BTN, "WAIT...", 3, COL_WARN, COL_ON_BRIGHT);
       drawSetupScreen();
     }

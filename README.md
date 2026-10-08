@@ -24,7 +24,7 @@ can be fine-tuned on the touchscreen, in steps of about 0.13°, and saved.
 | Adafruit FT6206 Library | Also needs **Adafruit BusIO** (the Library Manager offers to install it). |
 | LCDWIKI_SPI and LCDWIKI_gui | The copies you used for the Snap & Test sketch, from the Hosyond / LCDWIKI download. They must be the versions that know the `ST7796S` display. The public GitHub copy of `LCDWIKI_SPI` does not. |
 
-Compile and upload `CycleTester/CycleTester.ino`. Nothing moves at power-up: the servos get no signal until you press START.
+Compile and upload `CycleTester/CycleTester.ino`. Nothing moves at power-up. A servo first gets a signal (and can move) when you press START, or when you first jog or GO on the CALIBRATE screen.
 
 ## 2. Wiring
 
@@ -91,7 +91,9 @@ Use it to set, for each servo, **where the sweep starts** and **how far it goes*
 mounting tolerance: a servo horn can only be fitted in steps of about 14° (a 25-tooth spline), so software trims the
 rest. Only the servo you are adjusting is switched on, and the arm follows every press so you can watch it and measure.
 
-* **S1 – S4** pick the servo. Picking one does not move it; the first jog or GO does.
+* **S1 – S4** pick the servo. Picking one does not move it. The first jog or GO switches that servo on, **so keep your hands clear of the fixture**; it is switched on at the position where it was last left, then moves gently.
+* Small corrections (up to 50 µs) move the arm at once, so a held button follows your finger. A bigger move, such as going from the START row to the END row, glides slowly instead of whipping the arm across.
+* Switching to another servo, or leaving with BACK, releases the one you were adjusting. **BACK** first glides the arm to its start position, then lets go.
 * **START row** moves the **whole sweep**: start and end together, so a 180° sweep stays 180°. Use this to set where the cycle starts.
 * **END row** moves **only the end**. Use it to make the sweep exactly 180° (measure with a protractor or your fixture).
 * **Step buttons** `-25 -5 -1 +1 +5 +25` are in microseconds of pulse width. **1 µs ≈ 0.13°**, 5 µs ≈ 0.7°, 25 µs ≈ 3.4° on a 270° servo.

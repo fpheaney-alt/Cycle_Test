@@ -7,6 +7,7 @@
 struct EEPROMClass {
   uint8_t mem[4096];
   unsigned long byteWrites = 0;
+  long powerCutAfterBytes = -1;     // >= 0: only this many more bytes get written, as if power failed part way through
   EEPROMClass() { memset(mem, 0xFF, sizeof(mem)); }
   template <typename T> T& get(int address, T& value) {
     memcpy(&value, mem + address, sizeof(T));
@@ -15,7 +16,12 @@ struct EEPROMClass {
   template <typename T> const T& put(int address, const T& value) {
     const uint8_t* p = (const uint8_t*)&value;
     for (size_t i = 0; i < sizeof(T); i++) {
-      if (mem[address + i] != p[i]) { mem[address + i] = p[i]; byteWrites++; }
+      if (mem[address + i] != p[i]) {
+        if (powerCutAfterBytes == 0) continue;           // power is gone: nothing more gets written
+        if (powerCutAfterBytes > 0) powerCutAfterBytes--;
+        mem[address + i] = p[i];
+        byteWrites++;
+      }
     }
     return value;
   }
