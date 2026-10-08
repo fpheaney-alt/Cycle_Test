@@ -156,6 +156,8 @@ Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches th
 * **Pulses above 2476 µs used to be silently clipped.** ServoEasing attaches the Servo library with its default 400–3500 µs range, but the AVR Servo library stores that range in signed 8-bit numbers that overflow, so the effective maximum became 2476 µs. With the old 180° defaults the 2500 µs end pulse was really sent as 2476 µs. `Config.h` now sets `MINIMUM_PULSE_WIDTH 400` / `MAXIMUM_PULSE_WIDTH 2600` before ServoEasing is included, which keeps the range within 8-bit limits. The PC simulation reproduces the real clip, so a regression is caught.
 * **The calibration screen drives the pulse width directly** (`Servo::writeMicroseconds`), because ServoEasing's degree scale is fixed when it is attached. After calibrating, the servo is released and re-attached with the new end points before the next test, so the two never disagree.
 * **Saved calibration carries a signature of the servo settings in `Config.h`** plus a checksum. Values measured for one configuration are never applied to another, and a damaged or blank EEPROM falls back to the `Config.h` values.
+* **Saving is power-cut safe.** Two copies are kept in the EEPROM and written alternately, each with a sequence number. A save always writes the copy that is *not* the newest, so if the power fails halfway through, the previous good copy is still there and is the one loaded next time; a half-written copy fails its checksum and is ignored. Saving values that are already stored writes nothing, so the EEPROM is not worn by repeated SAVE presses. The simulation cuts the power after every single byte of a save to prove this. (The first release kept one copy; it is still read, so nothing saved with it is lost.)
+* **The arm never snaps during calibration.** The first time a servo is switched on it is told to start where it was last left (so the horn does not jump), small adjustments (up to 50 µs, about 7°) are sent at once, and bigger moves such as GO START / GO END glide at a fixed slow rate. Leaving the screen glides every switched-on servo to its start position before releasing it.
 
 ## 8. What has and has not been verified
 
@@ -197,4 +199,5 @@ cd tests/host
 make            # runs all checks (needs g++)
 make pictures   # also saves PNGs of the screens in out/ (needs Python 3 + Pillow)
 make test180    # same, with the 180° servo settings
+make testnosave # same, with USE_SAVED_CALIBRATION = false (SAVE must refuse and store nothing)
 ```
