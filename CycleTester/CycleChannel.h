@@ -6,9 +6,10 @@
 // the arm keeps moving smoothly even while the main loop is busy redrawing the screen.
 #pragma once
 #include <Arduino.h>
+#include "Config.h"            // first: it sets the pulse limits that ServoEasing and the Servo library read
 #define SUPPRESS_HPP_WARNING   // the library's code (ServoEasing.hpp) is included from CycleChannel.cpp only
 #include <ServoEasing.h>
-#include "Config.h"
+#include "Calibration.h"
 
 enum ChannelStatus : uint8_t {
   CH_OFF,       // target is 0: this servo is not part of the test
@@ -33,6 +34,16 @@ class CycleChannel {
   ChannelStatus status() const;
   bool          waitingToStart() const { return enabled_ && !paused_ && phase_ == PH_WAIT; }
 
+  // ---- end points, and the calibration screen's control of the arm (only between tests) ----
+  int  startUs() const { return startUs_; }
+  int  endUs()   const { return endUs_; }
+  void setEndpoints(int startUs, int endUs) { startUs_ = startUs; endUs_ = endUs; }
+  bool calIdle() const      { return phase_ == PH_IDLE || phase_ == PH_CAL; }   // free to be calibrated
+  bool calEnergized() const { return phase_ == PH_CAL; }                        // currently being driven for calibration
+  bool calJumpTo(int us, uint32_t now);    // switch the servo on if needed and put the arm at this pulse width now
+  bool calGlideTo(int us, uint32_t now);   // glide there at CAL_SLEW_US_PER_SEC
+  void calRelease();                       // stop sending a signal (the servo goes limp)
+
  private:
   enum Phase : uint8_t {
     PH_IDLE,          // not part of a test
@@ -43,13 +54,15 @@ class CycleChannel {
     PH_HOLD_START,    // resting at the start position
     PH_FINISHING,     // last cycle done, letting the servo settle before it is released
     PH_DONE,          // finished
-    PH_HOMING         // test was aborted: gently returning to the start position
+    PH_HOMING,        // test was aborted: gently returning to the start position
+    PH_CAL            // being driven directly by the calibration screen
   };
 
   bool isMovePhase() const    { return phase_ == PH_TO_END || phase_ == PH_TO_START; }
   bool isPausablePhase() const { return phase_ == PH_WAIT || phase_ == PH_TO_END || phase_ == PH_HOLD_END ||
                                         phase_ == PH_TO_START || phase_ == PH_HOLD_START; }
   bool ensureAttached();
+  bool calEnergize(uint32_t now);
   void release();
   void startMove(int degree);
   void log(const __FlashStringHelper* what) const;
@@ -57,7 +70,8 @@ class CycleChannel {
   ServoEasing servo_;
   uint8_t  index_ = 0;
   uint8_t  pin_ = 0;
-  int      startUs_ = 1500, endUs_ = 1500;
+  int      startUs_ = 1500, endUs_ = 1500;   // the ends of the sweep in use (factory, saved or just calibrated)
+  int      mapStartUs_ = 0, mapEndUs_ = 0;    // the ends ServoEasing was attached with (its 0..180 degree scale)
 
   Phase    phase_ = PH_IDLE;
   bool     enabled_ = false;      // part of the current test
@@ -69,11 +83,14 @@ class CycleChannel {
   uint32_t deadline_ = 0;         // when a timed phase (wait / hold / finishing) ends
   uint32_t remainingMs_ = 0;      // time left in a timed phase, saved while paused
   int      resumeDegree_ = 0;     // where an interrupted sweep was heading
+  float    calUs_ = 0;            // calibration: pulse width being sent now
+  int      calTargetUs_ = 0;      // calibration: pulse width it is gliding towards
+  uint32_t calLastMs_ = 0;
 };
 
 class CycleController {
  public:
-  void init();
+  void init();                                                    // also loads any saved calibration
 
   void begin(const uint32_t targets[NUM_SERVOS], uint32_t now);  // start a new test
   void abort();                                                   // end the test, return servos to start
@@ -88,8 +105,27 @@ class CycleController {
   uint8_t countWithStatus(ChannelStatus s) const;
   bool allFinished() const;                                       // every servo is DONE or OFF
 
+  // ---- calibration: set each servo's start and end pulse. Only between tests. ----
+  enum CalSource : uint8_t {
+    CAL_FROM_CONFIG,      // using the factory values from Config.h
+    CAL_FROM_SAVED,       // using values saved on the calibration screen
+    CAL_SAVED_IGNORED     // something was saved, but Config.h's servo settings changed since, so it was ignored
+  };
+  CalSource calSource() const { return calSource_; }
+  bool calibrationAllowed() const;                               // no test running and no servo still moving
+  void calSelect(uint8_t index);                                 // release every servo except this one
+  bool calJog(uint8_t index, bool jogEnd, int deltaUs, uint32_t now);   // START: shift both ends. END: move the end only
+  bool calGo(uint8_t index, bool toEnd, uint32_t now);           // glide the arm to its start or end
+  bool calSetDefaults(uint8_t index, uint32_t now);              // this servo back to the Config.h values
+  void calReleaseAll();
+  bool calDirty() const;                                         // differs from what is saved
+  bool calSave();                                                // write to EEPROM
+  void calDiscard();                                             // back to what is saved
+
  private:
   CycleChannel ch_[NUM_SERVOS];
   bool active_ = false;
   uint32_t nextStartMs_ = 0;      // earliest time the next waiting servo may switch on
+  EndPoints saved_;               // what is stored in EEPROM, or the Config.h values if nothing usable is stored
+  CalSource calSource_ = CAL_FROM_CONFIG;
 };

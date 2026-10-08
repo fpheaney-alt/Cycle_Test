@@ -60,6 +60,26 @@ const int16_t RUN_ROW_H    = 50;
 const int16_t RUN_BOTTOM_Y = 258;
 const int16_t RUN_BOTTOM_H = 54;
 
+// --- Calibration screen ---
+const int16_t CALSCR_TAB_Y    = 34;     // servo tabs S1..S4
+const int16_t CALSCR_TAB_H    = 32;
+const int16_t CALSCR_TAB_W    = 108;
+const int16_t CALSCR_TAB_GAP  = 6;
+const int16_t CALSCR_ROW_Y0   = 70;     // the START row; the END row is one step below
+const int16_t CALSCR_ROW_STEP = 46;
+const int16_t CALSCR_ROW_H    = 42;
+const int16_t CALSCR_BOX_X    = 4;      // the value box at the left of each row
+const int16_t CALSCR_BOX_W    = 118;
+const int16_t CALSCR_JOG_X0   = 126;    // the six jog buttons
+const int16_t CALSCR_JOG_W    = 55;
+const int16_t CALSCR_JOG_GAP  = 3;
+const int16_t CALSCR_INFO_Y   = 162;    // three lines of text under the rows
+const int16_t CALSCR_INFO_STEP = 18;
+const int16_t CALSCR_BTN1_Y   = 220;    // GO START / GO END / DEFAULT
+const int16_t CALSCR_BTN1_H   = 36;
+const int16_t CALSCR_BTN2_Y   = 262;    // SAVE / BACK
+const int16_t CALSCR_BTN2_H   = 48;
+
 // ===========================================================================
 // SMALL DRAWING TOOLKIT
 // ===========================================================================
@@ -107,7 +127,7 @@ static void drawTextCentered(const Rect& r, const char* s, uint8_t scale, uint16
 
 // A piece of text that remembers what is on screen, and repaints only the characters that changed.
 // Updating a counter from 1234 to 1235 repaints one digit instead of the whole number.
-struct Field { char shown[24]; uint16_t fg; };
+struct Field { char shown[32]; uint16_t fg; };
 
 static void resetField(Field& f) { memset(f.shown, 0, sizeof(f.shown)); f.fg = 0; }
 
@@ -163,7 +183,7 @@ static void drawHeader(const char* title) {
 // ===========================================================================
 // STATE
 // ===========================================================================
-enum Screen : uint8_t { SCREEN_SETUP, SCREEN_RUN };
+enum Screen : uint8_t { SCREEN_SETUP, SCREEN_RUN, SCREEN_CAL };
 
 static CycleController* ctl = nullptr;
 static Screen screen = SCREEN_SETUP;
@@ -179,13 +199,22 @@ enum Action : int8_t {
   ACT_TOGGLE = 20,       // 20..23: pause/resume servo (action - 20)
   ACT_PAUSE_ALL  = 24,
   ACT_RESUME_ALL = 25,
-  ACT_SETUP  = 26        // back to the setup screen
+  ACT_SETUP  = 26,       // back to the setup screen
+  ACT_CAL_ENTER = 30,    // open the calibration screen
+  ACT_CAL_TAB   = 31,    // 31..34: pick servo
+  ACT_CAL_GO_START = 35,
+  ACT_CAL_GO_END   = 36,
+  ACT_CAL_DEFAULT  = 37,
+  ACT_CAL_SAVE     = 38,
+  ACT_CAL_BACK     = 39,
+  ACT_CAL_JOG      = 40  // 40..51: row * 6 + k   (row 0 = START, 1 = END; k 0..2 = minus large..small, 3..5 = plus small..large)
 };
 
 // --- Setup screen state ---
 static Field setupValueField[NUM_SERVOS];
 static Field setupEstimateField;
 static uint32_t setupMessageUntil = 0;          // while non-zero, the estimate line shows a warning
+static bool     setupMessageBusy = false;       // which warning: servos still moving (true) or no target chosen (false)
 
 // --- Run screen state: what is currently drawn, so only changes are repainted ---
 enum OverallState : uint8_t { OV_RUNNING, OV_PAUSED, OV_COMPLETE, OV_FAULT, OV_UNKNOWN = 255 };
@@ -215,8 +244,9 @@ static Rect setupRect(uint8_t row, SetupPart part) {
   return Rect{ x, y, widths[part], SETUP_ROW_H };
 }
 
-static const Rect COPY_BTN  = { 8,   SETUP_BOTTOM_Y, 156, SETUP_BOTTOM_H };
-static const Rect START_BTN = { 170, SETUP_BOTTOM_Y, 300, SETUP_BOTTOM_H };
+static const Rect CAL_BTN   = { 8,   SETUP_BOTTOM_Y, 120, SETUP_BOTTOM_H };
+static const Rect COPY_BTN  = { 134, SETUP_BOTTOM_Y, 120, SETUP_BOTTOM_H };
+static const Rect START_BTN = { 260, SETUP_BOTTOM_Y, 210, SETUP_BOTTOM_H };
 
 static void formatDuration(uint64_t seconds, char* out, size_t n) {
   unsigned long d = (unsigned long)(seconds / 86400UL);
@@ -237,7 +267,7 @@ static void drawEstimate() {
   char text[40];
   uint16_t color = COL_DIM;
   if (setupMessageUntil != 0) {
-    snprintf(text, sizeof(text), "Set a target first");
+    snprintf(text, sizeof(text), setupMessageBusy ? "Servos still moving, wait" : "Set a target first");
     color = COL_BAD;
   } else if (longest == 0) {
     snprintf(text, sizeof(text), "No servos selected");
@@ -292,6 +322,7 @@ static void drawSetupScreen() {
     drawSetupValue(row);
   }
   drawEstimate();
+  drawButton(CAL_BTN, "CALIBRATE", 2, COL_BUTTON, COL_TEXT);
   drawButton(COPY_BTN, "ALL = S1", 2, COL_BUTTON, COL_TEXT);
   drawButton(START_BTN, "START", 3, COL_GOOD, COL_ON_BRIGHT);
   inputBlockedUntil = millis() + 400;
@@ -476,6 +507,152 @@ static void refreshRunStep(uint32_t now) {
 }
 
 // ===========================================================================
+// CALIBRATION SCREEN
+// ===========================================================================
+// Pick a servo, then jog START (moves the whole 180 degree sweep) and END (moves only the end) in small
+// steps. Only the servo you are adjusting is switched on, and the arm follows every press, so you can watch it
+// and measure. SAVE keeps the values in EEPROM. Everything here is in microseconds of pulse width; the
+// degrees shown are the nominal conversion from Config.h.
+
+static uint8_t     calServo = 0;                 // the servo being adjusted
+static Field       calStartField, calEndField, calInfoField1, calInfoField2, calStatusField;
+static bool        calDiscardPending = false;    // BACK was tapped with unsaved changes: waiting for a second tap
+static uint32_t    calDiscardUntil = 0;
+static const char* calMessage = nullptr;         // a short-lived line of status text (always a string literal)
+static uint16_t    calMessageColor = 0;
+static uint32_t    calMessageUntil = 0;
+
+static Rect calTabRect(uint8_t i) {
+  return Rect{ (int16_t)(12 + i * (CALSCR_TAB_W + CALSCR_TAB_GAP)), CALSCR_TAB_Y, CALSCR_TAB_W, CALSCR_TAB_H };
+}
+static Rect calBoxRect(uint8_t row) {
+  return Rect{ CALSCR_BOX_X, (int16_t)(CALSCR_ROW_Y0 + row * CALSCR_ROW_STEP), CALSCR_BOX_W, CALSCR_ROW_H };
+}
+static Rect calJogRect(uint8_t row, uint8_t k) {
+  return Rect{ (int16_t)(CALSCR_JOG_X0 + k * (CALSCR_JOG_W + CALSCR_JOG_GAP)), (int16_t)(CALSCR_ROW_Y0 + row * CALSCR_ROW_STEP), CALSCR_JOG_W, CALSCR_ROW_H };
+}
+static const Rect CAL_GO_START_BTN = { 4,   CALSCR_BTN1_Y, 152, CALSCR_BTN1_H };
+static const Rect CAL_GO_END_BTN   = { 162, CALSCR_BTN1_Y, 152, CALSCR_BTN1_H };
+static const Rect CAL_DEFAULT_BTN  = { 320, CALSCR_BTN1_Y, 152, CALSCR_BTN1_H };
+static const Rect CAL_SAVE_BTN     = { 4,   CALSCR_BTN2_Y, 232, CALSCR_BTN2_H };
+static const Rect CAL_BACK_BTN     = { 242, CALSCR_BTN2_Y, 230, CALSCR_BTN2_H };
+
+// Pulse width -> degrees, using the nominal figures from Config.h. The real servo can differ a little;
+// that is exactly what calibrating by eye is for.
+static const long US_PER_DEG_X1000 = (long)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * 1000L / SERVO_FULL_TRAVEL_DEG;
+static long tenthsOfDegree(long us) { return (us * 10000L + US_PER_DEG_X1000 / 2) / US_PER_DEG_X1000; }
+
+static int calJogDelta(uint8_t k) { return (k < 3) ? -(int)CAL_STEP_US[2 - k] : (int)CAL_STEP_US[k - 3]; }
+
+static void drawCalTab(uint8_t i) {
+  char label[8];
+  snprintf(label, sizeof(label), "S%u", (unsigned)(i + 1));
+  bool on = (i == calServo);
+  drawButton(calTabRect(i), label, 2, on ? COL_ACCENT : COL_BUTTON, on ? COL_ON_BRIGHT : COL_TEXT);
+}
+
+static void drawCalValues() {
+  const CycleChannel& c = ctl->channel(calServo);
+  char text[64];
+  Rect startBox = calBoxRect(0), endBox = calBoxRect(1);
+  snprintf(text, sizeof(text), "%d", c.startUs());
+  drawField(calStartField, startBox.x + 8, startBox.y + 16, 3, COL_TEXT, COL_PANEL, text, 4, ALIGN_RIGHT);
+  snprintf(text, sizeof(text), "%d", c.endUs());
+  drawField(calEndField, endBox.x + 8, endBox.y + 16, 3, COL_TEXT, COL_PANEL, text, 4, ALIGN_RIGHT);
+
+  int span = abs(c.endUs() - c.startUs());
+  long tenths = tenthsOfDegree(span);
+  snprintf(text, sizeof(text), "Sweep %d us = %ld.%ld deg%s", span, tenths / 10, tenths % 10, c.endUs() < c.startUs() ? " (REV)" : "");
+  drawField(calInfoField1, 8, CALSCR_INFO_Y, 2, COL_TEXT, COL_BG, text, 31, ALIGN_LEFT);
+}
+
+static void drawCalStatus(uint32_t now) {
+  const char* text;
+  uint16_t color;
+  if (calMessage != nullptr && (int32_t)(now - calMessageUntil) < 0) { text = calMessage; color = calMessageColor; }
+  else if (calDiscardPending)                                       { text = "Tap BACK again to discard"; color = COL_BAD; }
+  else if (ctl->calDirty())                                         { text = "UNSAVED - tap SAVE"; color = COL_WARN; }
+  else                                                              { text = "START moves both, END moves one"; color = COL_DIM; }
+  drawField(calStatusField, 8, CALSCR_INFO_Y + 2 * CALSCR_INFO_STEP, 2, color, COL_BG, text, 31, ALIGN_LEFT);
+}
+
+static void drawCalBack() {
+  if (calDiscardPending) drawButton(CAL_BACK_BTN, "DISCARD?", 3, COL_BAD, COL_TEXT);
+  else                   drawButton(CAL_BACK_BTN, "BACK", 3, COL_BUTTON, COL_TEXT);
+}
+
+static void setCalMessage(const char* text, uint16_t color, uint32_t now, uint32_t forMs) {
+  calMessage = text;
+  calMessageColor = color;
+  calMessageUntil = now + forMs;
+  drawCalStatus(now);
+}
+
+static void drawCalScreen() {
+  screen = SCREEN_CAL;
+  calDiscardPending = false;
+  calMessage = nullptr;
+  gfx.Fill_Screen(COL_BG);
+  drawHeader("CALIBRATE");
+  const char* sub = "one servo on at a time";
+  drawText(SCREEN_W - 10 - textWidth(sub, 1), 12, sub, 1, COL_DIM, COL_BG);
+
+  resetField(calStartField);
+  resetField(calEndField);
+  resetField(calInfoField1);
+  resetField(calInfoField2);
+  resetField(calStatusField);
+
+  for (uint8_t i = 0; i < NUM_SERVOS; i++) drawCalTab(i);
+
+  for (uint8_t row = 0; row < 2; row++) {
+    Rect box = calBoxRect(row);
+    drawBox(box, COL_PANEL, COL_BORDER);
+    drawText(box.x + 8, box.y + 5, row == 0 ? "START" : "END", 1, COL_DIM, COL_PANEL);
+    drawText(box.x + 8 + 4 * 18 + 6, box.y + 28, "us", 1, COL_DIM, COL_PANEL);
+    for (uint8_t k = 0; k < 6; k++) {
+      int d = calJogDelta(k);
+      char label[8];
+      snprintf(label, sizeof(label), "%c%d", d < 0 ? '-' : '+', d < 0 ? -d : d);
+      drawButton(calJogRect(row, k), label, 2, COL_BUTTON, COL_TEXT);
+    }
+  }
+  drawCalValues();
+
+  char text[96];
+  long t0 = tenthsOfDegree(CAL_STEP_US[0]), t1 = tenthsOfDegree(CAL_STEP_US[1]), t2 = tenthsOfDegree(CAL_STEP_US[2]);
+  snprintf(text, sizeof(text), "%u/%u/%u us = %ld.%ld/%ld.%ld/%ld.%ld deg", (unsigned)CAL_STEP_US[0], (unsigned)CAL_STEP_US[1], (unsigned)CAL_STEP_US[2],
+           t0 / 10, t0 % 10, t1 / 10, t1 % 10, t2 / 10, t2 % 10);
+  drawField(calInfoField2, 8, CALSCR_INFO_Y + CALSCR_INFO_STEP, 2, COL_DIM, COL_BG, text, 31, ALIGN_LEFT);
+
+  drawButton(CAL_GO_START_BTN, "GO START", 2, COL_BUTTON, COL_TEXT);
+  drawButton(CAL_GO_END_BTN,   "GO END",   2, COL_BUTTON, COL_TEXT);
+  drawButton(CAL_DEFAULT_BTN,  "DEFAULT",  2, COL_BUTTON, COL_TEXT);
+  drawButton(CAL_SAVE_BTN,     "SAVE",     3, COL_GOOD, COL_ON_BRIGHT);
+  drawCalBack();
+
+  uint32_t now = millis();        // taken after the (slow) redraw, so the message is on screen for its full time
+  CycleController::CalSource src = ctl->calSource();
+  if (src == CycleController::CAL_SAVED_IGNORED)    setCalMessage("Config changed, saved cal reset", COL_WARN, now, 8000);
+  else if (src == CycleController::CAL_FROM_SAVED)  setCalMessage("Loaded saved calibration", COL_GOOD, now, 4000);
+  else                                              drawCalStatus(now);
+  inputBlockedUntil = millis() + 400;
+}
+
+// Called every pass while the calibration screen is up: lets timed messages and the discard question expire.
+static void updateCal(uint32_t now) {
+  if (calDiscardPending && (int32_t)(now - calDiscardUntil) >= 0) {
+    calDiscardPending = false;
+    drawCalBack();
+    drawCalStatus(now);
+  }
+  if (calMessage != nullptr && (int32_t)(now - calMessageUntil) >= 0) {
+    calMessage = nullptr;
+    drawCalStatus(now);
+  }
+}
+
+// ===========================================================================
 // TOUCH
 // ===========================================================================
 static Action hitTest(int16_t x, int16_t y) {
@@ -485,8 +662,20 @@ static Action hitTest(int16_t x, int16_t y) {
       for (uint8_t k = 0; k < 4; k++)
         if (inRect(setupRect(row, parts[k]), x, y)) return (Action)(ACT_ADJUST + row * 4 + k);
     }
+    if (inRect(CAL_BTN, x, y))   return ACT_CAL_ENTER;
     if (inRect(COPY_BTN, x, y))  return ACT_COPY;
     if (inRect(START_BTN, x, y)) return ACT_START;
+  } else if (screen == SCREEN_CAL) {
+    for (uint8_t i = 0; i < NUM_SERVOS; i++)
+      if (inRect(calTabRect(i), x, y)) return (Action)(ACT_CAL_TAB + i);
+    for (uint8_t row = 0; row < 2; row++)
+      for (uint8_t k = 0; k < 6; k++)
+        if (inRect(calJogRect(row, k), x, y)) return (Action)(ACT_CAL_JOG + row * 6 + k);
+    if (inRect(CAL_GO_START_BTN, x, y)) return ACT_CAL_GO_START;
+    if (inRect(CAL_GO_END_BTN, x, y))   return ACT_CAL_GO_END;
+    if (inRect(CAL_DEFAULT_BTN, x, y))  return ACT_CAL_DEFAULT;
+    if (inRect(CAL_SAVE_BTN, x, y))     return ACT_CAL_SAVE;
+    if (inRect(CAL_BACK_BTN, x, y))     return ACT_CAL_BACK;
   } else {
     for (uint8_t row = 0; row < NUM_SERVOS; row++)
       if (inRect(runToggleRect(row), x, y)) return (Action)(ACT_TOGGLE + row);
@@ -497,7 +686,9 @@ static Action hitTest(int16_t x, int16_t y) {
   return ACT_NONE;
 }
 
-static bool isRepeating(Action a) { return a >= ACT_ADJUST && a < ACT_COPY; }
+static bool isRepeating(Action a) {      // buttons that keep stepping while held
+  return (a >= ACT_ADJUST && a < ACT_COPY) || (a >= ACT_CAL_JOG && a < ACT_CAL_JOG + 12);
+}
 
 static void enterSetup() {
   drawButton(SETUP_BTN, "WAIT...", 2, COL_WARN, COL_ON_BRIGHT);   // instant feedback: the full redraw takes a couple of seconds
@@ -507,6 +698,10 @@ static void enterSetup() {
 
 static void perform(Action a, uint32_t now) {
   if (a != ACT_SETUP) confirmPending = false;      // tapping anything else cancels a pending "SURE?"
+  if (a != ACT_CAL_BACK && calDiscardPending) {    // ...and a pending "DISCARD?" on the calibration screen
+    calDiscardPending = false;
+    if (screen == SCREEN_CAL) { drawCalBack(); drawCalStatus(now); }
+  }
 
   if (a >= ACT_ADJUST && a < ACT_COPY) {
     adjustTarget((a - ACT_ADJUST) / 4, (a - ACT_ADJUST) % 4);
@@ -521,6 +716,7 @@ static void perform(Action a, uint32_t now) {
     bool any = false;
     for (uint8_t i = 0; i < NUM_SERVOS; i++) if (targets[i] > 0) any = true;
     if (!any) {
+      setupMessageBusy = false;
       setupMessageUntil = now + 2000;
       drawEstimate();
       return;
@@ -544,6 +740,66 @@ static void perform(Action a, uint32_t now) {
     } else {
       confirmPending = true;                        // first tap: ask for a second one
       confirmUntil = now + CONFIRM_WINDOW_MS;
+    }
+
+  } else if (a == ACT_CAL_ENTER) {
+    if (!ctl->calibrationAllowed()) {               // a servo is still homing after the last test
+      setupMessageBusy = true;
+      setupMessageUntil = now + 2500;
+      drawEstimate();
+      return;
+    }
+    drawButton(CAL_BTN, "WAIT...", 2, COL_WARN, COL_ON_BRIGHT);   // instant feedback: the full redraw takes a couple of seconds
+    drawCalScreen();
+
+  } else if (a >= ACT_CAL_TAB && a < ACT_CAL_TAB + NUM_SERVOS) {
+    uint8_t picked = a - ACT_CAL_TAB;
+    if (picked != calServo) {
+      uint8_t previous = calServo;
+      calServo = picked;
+      ctl->calSelect(picked);                       // the previous servo goes limp; the new one stays off until you move it
+      calMessage = nullptr;
+      drawCalTab(previous);
+      drawCalTab(picked);
+      drawCalValues();
+      drawCalStatus(now);
+    }
+
+  } else if (a >= ACT_CAL_JOG && a < ACT_CAL_JOG + 12) {
+    uint8_t row = (a - ACT_CAL_JOG) / 6, k = (a - ACT_CAL_JOG) % 6;
+    if (ctl->calJog(calServo, row == 1, calJogDelta(k), now)) {
+      calMessage = nullptr;
+      drawCalValues();
+      drawCalStatus(now);
+    } else {
+      setCalMessage("At the limit", COL_WARN, now, 1200);
+    }
+
+  } else if (a == ACT_CAL_GO_START || a == ACT_CAL_GO_END) {
+    ctl->calGo(calServo, a == ACT_CAL_GO_END, now);
+
+  } else if (a == ACT_CAL_DEFAULT) {
+    ctl->calSetDefaults(calServo, now);
+    calMessage = nullptr;
+    drawCalValues();
+    drawCalStatus(now);
+
+  } else if (a == ACT_CAL_SAVE) {
+    if (ctl->calSave()) setCalMessage("Saved", COL_GOOD, now, 2500);
+    else                setCalMessage("SAVE FAILED", COL_BAD, now, 4000);
+
+  } else if (a == ACT_CAL_BACK) {
+    if (ctl->calDirty() && !(calDiscardPending && (int32_t)(now - calDiscardUntil) < 0)) {
+      calDiscardPending = true;                     // unsaved changes: ask before throwing them away
+      calDiscardUntil = now + CONFIRM_WINDOW_MS;
+      drawCalBack();
+      drawCalStatus(now);
+    } else {
+      calDiscardPending = false;
+      if (ctl->calDirty()) ctl->calDiscard();
+      ctl->calReleaseAll();
+      drawButton(CAL_BACK_BTN, "WAIT...", 3, COL_WARN, COL_ON_BRIGHT);
+      drawSetupScreen();
     }
   }
 }
@@ -643,6 +899,8 @@ void Ui::update(uint32_t now) {
       setupMessageUntil = 0;
       drawEstimate();
     }
+  } else if (screen == SCREEN_CAL) {
+    updateCal(now);
   } else {
     refreshRunStep(now);
   }

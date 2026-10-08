@@ -2,7 +2,7 @@
 #
 #   make            build and run the full simulation (takes a few seconds)
 #   make pictures   also turn the saved screens in out/ into PNG files (needs Pillow)
-#   make test270    run again with the settings for a 270 degree servo
+#   make test180    run again with the settings for a 180 degree servo
 #   make clean
 #
 # The simulation compiles the real sketch sources from ../../CycleTester together with the fake
@@ -14,10 +14,10 @@ CXX    ?= g++
 WARN     = -std=gnu++11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 CXXFLAGS = $(WARN) -Imocks -I$(SKETCH)
 
-SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h \
+SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Calibration.cpp $(SKETCH)/Calibration.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h \
       $(SKETCH)/Config.h $(SKETCH)/CycleTester.ino $(SKETCH)/Font5x7.h $(wildcard mocks/*.h mocks/*.hpp)
 
-.PHONY: all run pictures test270 clean
+.PHONY: all run pictures test180 clean
 all: run
 
 sim: $(SRC)
@@ -30,13 +30,13 @@ run: sim
 pictures: run
 	python3 render.py out
 
-# Same simulation with a 270 degree servo: the 180 degree sweep must be centred in its travel (833..2167 us).
-test270:
-	rm -rf build/cfg270 && mkdir -p build/cfg270 out
-	cp $(SKETCH)/* build/cfg270/
-	sed -i 's/SERVO_FULL_TRAVEL_DEG = 180;/SERVO_FULL_TRAVEL_DEG = 270;/; s/SWEEP_START_OFFSET_DEG = 0;/SWEEP_START_OFFSET_DEG = 45;/' build/cfg270/Config.h
-	grep -n "SERVO_FULL_TRAVEL_DEG =\|SWEEP_START_OFFSET_DEG =" build/cfg270/Config.h
-	$(CXX) $(WARN) -Imocks -Ibuild/cfg270 sim.cpp -o build/sim270 && ./build/sim270 --short
+# Same simulation with a 180 degree servo (the factory default is 270): the sweep is the servo's whole travel, 500..2500 us.
+test180:
+	rm -rf build/cfg180 && mkdir -p build/cfg180 out
+	cp $(SKETCH)/* build/cfg180/
+	sed -i 's/SERVO_FULL_TRAVEL_DEG = 270;/SERVO_FULL_TRAVEL_DEG = 180;/; s/SWEEP_START_OFFSET_DEG = 45;/SWEEP_START_OFFSET_DEG = 0;/' build/cfg180/Config.h
+	grep -n "SERVO_FULL_TRAVEL_DEG =\|SWEEP_START_OFFSET_DEG =" build/cfg180/Config.h
+	$(CXX) $(WARN) -Imocks -Ibuild/cfg180 sim.cpp -o build/sim180 && ./build/sim180 --short
 
 clean:
 	rm -rf sim out build

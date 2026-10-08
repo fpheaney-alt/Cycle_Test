@@ -19,16 +19,19 @@
 #include "Arduino.h"
 #include "Wire.h"
 #include "Adafruit_FT6206.h"
+#include "EEPROM.h"
 
 // ---- simulated clock and shared mock state ----
 uint64_t g_simUs = 0;
 SerialMock Serial;
 TwoWire Wire;
+EEPROMClass EEPROM;
 std::vector<ScriptedTouch> g_touchScript;
 std::vector<uint64_t> g_glitchPolls;
 int g_failBeginCount = 0;
 unsigned long g_i2cReads = 0;
 
+#include "Config.h"          // the sketch includes Config.h before ServoEasing.h (it sets the pulse limits); do the same here
 #include "ServoEasing.h"
 void simAdvanceUs(uint64_t us) {
   uint64_t target = g_simUs + us;
@@ -42,6 +45,7 @@ void simAdvanceUs(uint64_t us) {
 // Let the tests look inside the sketch (private members, file-static variables).
 #define private public
 #include "CycleChannel.cpp"
+#include "Calibration.cpp"
 #include "Ui.cpp"
 #include "CycleTester.ino"
 #undef private
@@ -70,6 +74,7 @@ struct Probe {                       // watches the cycle counters after every l
 
 static double g_maxStallUs = 0;      // longest single loop() pass while the run screen was up
 static double g_maxStallUsSetup = 0;
+static double g_maxStallUsCal = 0;
 static double g_maxTransitionUs = 0;
 static unsigned long g_loops = 0;
 
@@ -83,6 +88,7 @@ static void runMs(uint32_t ms) {
     if (screen == screenBefore) {                 // passes that change screens are deliberate full redraws
       if (screen == SCREEN_RUN && spent > g_maxStallUs) g_maxStallUs = spent;
       if (screen == SCREEN_SETUP && spent > g_maxStallUsSetup) g_maxStallUsSetup = spent;
+      if (screen == SCREEN_CAL && spent > g_maxStallUsCal) g_maxStallUsCal = spent;
     } else if (spent > g_maxTransitionUs) {
       g_maxTransitionUs = spent;
     }
@@ -386,7 +392,194 @@ static void scenarioAbortFlow() {
   CHECK(ServoEasing::leakedAttaches() == 0, "and never attaches a servo twice (%d)", ServoEasing::leakedAttaches());
 }
 
-// Used by "make test270": start a test with the default targets and make sure the arms use exactly their configured pulse range.
+
+// ---------------------------------------------------------------------------
+// Calibration screen
+// ---------------------------------------------------------------------------
+static int startOf(int i) { return controller.ch_[i].startUs(); }
+static int endOf(int i)   { return controller.ch_[i].endUs(); }
+static int attachedCount() { int n = 0; for (int i = 0; i < NUM_SERVOS; i++) if (servoOf(i).attached()) n++; return n; }
+static void tapJog(uint8_t row, uint8_t k) { tapRect(calJogRect(row, k)); }
+
+static void scenarioCalibration() {
+  SECTION("Calibration: getting in");
+  if (screen == SCREEN_RUN) { tapRect(SETUP_BTN); tapRect(SETUP_BTN); }
+  runMs(5000);
+  CHECK(screen == SCREEN_SETUP && controller.calibrationAllowed(), "on the setup screen with every servo idle");
+  CHECK(servoOf(0).clampMaxUs() == MAXIMUM_PULSE_WIDTH && MAXIMUM_PULSE_WIDTH == 2600,
+        "the Servo library will pass pulses up to %d us (the old default clipped at 2476)", servoOf(0).clampMaxUs());
+
+  // Not while a test is running or a servo is still homing.
+  controller.begin(targets, millis());
+  runMs(6000);
+  CHECK(!controller.calibrationAllowed(), "calibration is refused while a test is running");
+  tapRect(CAL_BTN);
+  CHECK(screen == SCREEN_SETUP && setupMessageBusy && setupMessageUntil != 0, "tapping CALIBRATE then only shows a warning");
+  controller.abort();
+  CHECK(!controller.calibrationAllowed(), "...and while the servos are still homing");
+  runMs(5000);
+  CHECK(controller.calibrationAllowed(), "allowed again once they are home");
+  runMs(3000);
+
+  tapRect(CAL_BTN);
+  CHECK(screen == SCREEN_CAL, "CALIBRATE opens the calibration screen");
+  CHECK(attachedCount() == 0, "no servo is switched on just by opening it");
+  snapshot("11_cal_entry");
+
+  SECTION("Calibration: START shifts the sweep, END changes it");
+  tapRect(calTabRect(1));
+  CHECK(calServo == 1 && attachedCount() == 0, "picking a servo selects it without switching it on");
+  const int s0 = startOf(1), e0 = endOf(1);
+  const int stepS = CAL_STEP_US[0], stepM = CAL_STEP_US[1], stepL = CAL_STEP_US[2];
+  printf("  S2 starts at %d..%d us (sweep %d us); steps are %d / %d / %d us\n", s0, e0, e0 - s0, stepS, stepM, stepL);
+
+  tapJog(0, 3);                                           // START, +small
+  CHECK(startOf(1) == s0 + stepS && endOf(1) == e0 + stepS, "START +%d us moves BOTH ends by %d us (sweep unchanged): now %d..%d", stepS, stepS, startOf(1), endOf(1));
+  CHECK(servoOf(1).attached() && attachedCount() == 1, "only the servo being adjusted is switched on");
+  CHECK(servoOf(1).pulseUs() == startOf(1), "the arm moved to the new start (%.0f us)", servoOf(1).pulseUs());
+  double stepDeg = stepS * 180.0 / (double)(SERVO_END_US[0] - SERVO_START_US[0]);
+  printf("  one small step = %d us = about %.2f degrees\n", stepS, stepDeg);
+  CHECK(stepDeg < 1.0, "the smallest step is well under one degree (%.2f)", stepDeg);
+
+  tapJog(1, 1);                                           // END, -medium
+  CHECK(endOf(1) == e0 + stepS - stepM && startOf(1) == s0 + stepS, "END -%d us moves only the end: now %d..%d", stepM, startOf(1), endOf(1));
+  CHECK(servoOf(1).pulseUs() == endOf(1), "the arm went to the end position to show it");
+  snapshot("12_cal_adjusted");
+
+  // limits: shifting never changes the sweep, and never leaves the pulse limits
+  int span = endOf(1) - startOf(1);
+  for (int i = 0; i < 400; i++) controller.calJog(1, false, +stepL, millis());
+  CHECK((startOf(1) > endOf(1) ? startOf(1) : endOf(1)) == SERVO_PULSE_MAX_US && endOf(1) - startOf(1) == span, "shifting up stops exactly at %d us with the sweep still %d us", SERVO_PULSE_MAX_US, span);
+  for (int i = 0; i < 400; i++) controller.calJog(1, false, -stepL, millis());
+  CHECK((startOf(1) < endOf(1) ? startOf(1) : endOf(1)) == SERVO_PULSE_MIN_US && endOf(1) - startOf(1) == span, "shifting down stops exactly at %d us with the sweep still %d us", SERVO_PULSE_MIN_US, span);
+  bool moved = controller.calJog(1, false, -stepL, millis());
+  CHECK(!moved, "a jog at the limit reports that nothing changed");
+  tapRect(calJogRect(0, 0));
+  CHECK(calMessage != nullptr && strcmp(calMessage, "At the limit") == 0, "and the screen says so");
+
+  for (int i = 0; i < 400; i++) controller.calJog(1, true, +stepL, millis());
+  CHECK(endOf(1) == SERVO_PULSE_MAX_US, "END can reach the top limit, %d us", endOf(1));
+  CHECK(servoOf(1).clampMaxUs() >= SERVO_PULSE_MAX_US, "...and the Servo library really lets that pulse through");
+  for (int i = 0; i < 400; i++) controller.calJog(1, true, -stepL, millis());
+  CHECK(endOf(1) - startOf(1) == (int)CAL_MIN_SWEEP_US, "END cannot come closer than %d us to START (it is %d)", (int)CAL_MIN_SWEEP_US, endOf(1) - startOf(1));
+  for (int i = 0; i < 400; i++) controller.calJog(2, true, +stepL, millis());      // a different servo; S2 is released
+  CHECK(attachedCount() == 1 && servoOf(2).attached() && !servoOf(1).attached(), "jogging another servo releases the first");
+
+  SECTION("Calibration: DEFAULT, GO START and GO END glide slowly");
+  tapRect(calTabRect(1));
+  tapRect(CAL_DEFAULT_BTN);
+  CHECK(startOf(1) == SERVO_START_US[1] && endOf(1) == SERVO_END_US[1], "DEFAULT restores the Config.h values");
+  tapJog(0, 3);
+  tapJog(0, 2);                                            // net zero
+  runMs(3000);
+  CHECK(servoOf(1).pulseUs() == startOf(1), "arm at start");
+  tapRect(CAL_GO_END_BTN);
+  double p1 = servoOf(1).pulseUs();
+  CHECK(p1 > startOf(1) + 100 && p1 < endOf(1) - 100, "GO END is a glide, not a jump (%.0f us between %d and %d)", p1, startOf(1), endOf(1));
+  runMs(400);
+  double p2 = servoOf(1).pulseUs();
+  double rate = (p2 - p1) / 0.4;
+  CHECK(rate > CAL_SLEW_US_PER_SEC * 0.75 && rate < CAL_SLEW_US_PER_SEC * 1.25, "glide speed %.0f us/s (setting %d)", rate, (int)CAL_SLEW_US_PER_SEC);
+  runMs(4000);
+  CHECK(servoOf(1).pulseUs() == endOf(1), "arm arrives at the end");
+  tapRect(CAL_GO_START_BTN);
+  runMs(4500);
+  CHECK(servoOf(1).pulseUs() == startOf(1), "and back at the start");
+
+  SECTION("Calibration: saving, loading, damage");
+  tapJog(0, 4);                                            // START +medium
+  tapJog(1, 0);                                            // END -large
+  const int sSaved = startOf(1), eSaved = endOf(1);
+  CHECK(controller.calDirty(), "changes are marked unsaved");
+  snapshot("13_cal_unsaved");
+  CHECK(EEPROM.byteWrites == 0, "jogging writes nothing to EEPROM (%lu bytes so far)", EEPROM.byteWrites);
+  tapRect(CAL_SAVE_BTN);
+  CHECK(!controller.calDirty() && calMessage != nullptr && strcmp(calMessage, "Saved") == 0, "SAVE stores the values and says so");
+  unsigned long afterSave = EEPROM.byteWrites;
+  CHECK(afterSave > 0 && afterSave <= sizeof(Block), "a save writes %lu bytes", afterSave);
+  tapRect(CAL_SAVE_BTN);
+  CHECK(EEPROM.byteWrites == afterSave, "saving identical values again writes nothing (no wear)");
+
+  controller.ch_[1].setEndpoints(1000, 2000);               // pretend a power cycle: forget everything, load again
+  controller.init();
+  CHECK(startOf(1) == sSaved && endOf(1) == eSaved && controller.calSource() == CycleController::CAL_FROM_SAVED, "after a restart the saved values are back (%d..%d)", startOf(1), endOf(1));
+
+  EEPROM.mem[10] ^= 0xFF;                                   // damage one byte
+  controller.init();
+  CHECK(startOf(1) == SERVO_START_US[1] && controller.calSource() == CycleController::CAL_FROM_CONFIG, "damaged data is rejected and the Config.h values are used");
+  EEPROM.mem[10] ^= 0xFF;
+  controller.init();
+  CHECK(startOf(1) == sSaved, "(undamaged again, it loads)");
+
+  Block b; EEPROM.get(0, b);                                // a block saved under a different Config.h
+  b.signature ^= 0x1234; b.crc = blockCrc(b); EEPROM.put(0, b);
+  controller.init();
+  CHECK(startOf(1) == SERVO_START_US[1] && controller.calSource() == CycleController::CAL_SAVED_IGNORED, "values saved for another Config.h are ignored, so a Config.h edit always wins");
+  controller.ch_[1].setEndpoints(sSaved, eSaved);           // put the good values back
+  CHECK(controller.calSave(), "and a new save replaces the stale block");
+
+  b.magic = 0xFFFF; memset(&b, 0xFF, sizeof(b)); EEPROM.put(0, b);   // blank EEPROM
+  controller.init();
+  CHECK(controller.calSource() == CycleController::CAL_FROM_CONFIG && startOf(1) == SERVO_START_US[1], "a blank EEPROM gives the Config.h values");
+  controller.ch_[1].setEndpoints(sSaved, eSaved);
+  controller.calSave();
+
+  SECTION("Calibration: BACK, discard, and using the result");
+  tapJog(0, 4);                                            // an unsaved change
+  CHECK(controller.calDirty(), "an unsaved change");
+  tapRect(CAL_BACK_BTN);
+  CHECK(screen == SCREEN_CAL && calDiscardPending, "BACK with unsaved changes asks first");
+  snapshot("14_cal_discard_question");
+  runMs(3500);
+  CHECK(!calDiscardPending && screen == SCREEN_CAL, "the question times out");
+  tapRect(CAL_BACK_BTN);
+  tapRect(CAL_BACK_BTN);
+  CHECK(screen == SCREEN_SETUP, "a second tap leaves");
+  CHECK(startOf(1) == sSaved && endOf(1) == eSaved && !controller.calDirty(), "the unsaved change was discarded");
+  CHECK(attachedCount() == 0, "every servo is released on leaving");
+
+  tapRect(CAL_BTN);
+  CHECK(screen == SCREEN_CAL && calMessage != nullptr && strcmp(calMessage, "Loaded saved calibration") == 0, "reopening says the saved calibration is in use");
+  tapRect(calTabRect(1));
+  tapJog(0, 5);                                            // START +large, then keep it
+  tapRect(CAL_SAVE_BTN);
+  tapRect(CAL_BACK_BTN);
+  CHECK(screen == SCREEN_SETUP, "BACK with nothing unsaved leaves at once");
+
+  for (int i = 0; i < NUM_SERVOS; i++) servoOf(i).resetStats();
+  targets[0] = targets[1] = targets[2] = 100; targets[3] = 100;
+  tapRect(START_BTN);
+  runMs(40000);
+  CHECK(servoOf(1).minUs() == (startOf(1) < endOf(1) ? startOf(1) : endOf(1)) && servoOf(1).maxUs() == (startOf(1) < endOf(1) ? endOf(1) : startOf(1)),
+        "a test uses the calibrated range: S2 moved over %d..%d us (calibrated %d..%d)", servoOf(1).minUs(), servoOf(1).maxUs(), startOf(1), endOf(1));
+  CHECK(servoOf(0).minUs() == SERVO_START_US[0] && servoOf(0).maxUs() == SERVO_END_US[0], "an uncalibrated servo still uses the Config.h values (%d..%d)", servoOf(0).minUs(), servoOf(0).maxUs());
+  CHECK(ServoEasing::leakedAttaches() == 0, "no servo was attached twice during all of this");
+  tapRect(SETUP_BTN); tapRect(SETUP_BTN);
+  runMs(4000);
+
+  SECTION("Calibration: hold to repeat, an OFF servo, reversed servo");
+  tapRect(CAL_BTN);
+  tapRect(calTabRect(3));                                   // servo 4 is OFF in the test but can still be calibrated
+  tapRect(CAL_DEFAULT_BTN);
+  const int h0 = startOf(3);
+  Rect plus1 = calJogRect(0, 3);
+  touchDown(plus1.x + plus1.w / 2, plus1.y + plus1.h / 2, 2000, 500);
+  int steps = startOf(3) - h0;
+  printf("  holding +%d us for 2 s gave %d steps\n", stepS, steps);
+  CHECK(steps >= 8 && steps <= 20, "holding a jog button repeats (%d steps)", steps);
+  CHECK(servoOf(3).attached() && attachedCount() == 1, "an OFF servo can be calibrated too");
+  tapRect(CAL_DEFAULT_BTN);
+  controller.ch_[3].setEndpoints(endOf(3), startOf(3));      // swapped ends = reversed direction
+  CHECK(controller.calJog(3, true, +stepM, millis()) && endOf(3) < startOf(3), "a reversed servo keeps its direction when END is jogged");
+  snapshot("15_cal_reversed");
+  tapRect(CAL_DEFAULT_BTN);
+  tapRect(CAL_BACK_BTN);
+  CHECK(screen == SCREEN_SETUP || calDiscardPending, "leaving");
+  if (screen == SCREEN_CAL) { tapRect(CAL_BACK_BTN); }
+  CHECK(screen == SCREEN_SETUP, "back on the setup screen");
+}
+
+// Used by "make test180"/"make test270": start a test with the default targets and make sure the arms use exactly their configured pulse range.
 static void scenarioShortRun() {
   SECTION("Short run: pulse range actually used");
   tapRect(START_BTN);
@@ -401,11 +594,13 @@ static void scenarioShortRun() {
 static void reportStalls() {
   SECTION("Responsiveness");
   printf("  longest single pass of loop(): %.0f ms on the run screen, %.0f ms on the setup screen\n", g_maxStallUs / 1000.0, g_maxStallUsSetup / 1000.0);
+  printf("  calibration screen: longest pass %.0f ms\n", g_maxStallUsCal / 1000.0);
   printf("  switching screens (full redraw) takes up to %.1f s\n", g_maxTransitionUs / 1e6);
   printf("  (the servos are moved by the timer interrupt, so these pauses do not make the arms stutter)\n");
   printf("  touch controller I2C reads: %lu over %.0f s = %.0f per second\n", g_i2cReads, nowS(), g_i2cReads / nowS());
   CHECK(g_maxStallUs < 400000, "run-screen updates never block loop() for more than 0.4 s");
   CHECK(g_maxStallUsSetup < 400000, "setup-screen updates never block loop() for more than 0.4 s");
+  CHECK(g_maxStallUsCal < 400000, "calibration-screen updates never block loop() for more than 0.4 s");
 }
 
 // ===========================================================================
@@ -434,6 +629,7 @@ int main(int argc, char** argv) {
     scenarioRunAndPause();
     scenarioFinish();
     scenarioAbortFlow();
+    scenarioCalibration();
     reportStalls();
   }
 

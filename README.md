@@ -2,12 +2,13 @@
 
 A four-servo cycle-testing robot for an Arduino Mega with a touchscreen. Pick how many cycles each servo should
 do, press START, and watch the counters. Each servo sweeps 180°, returns to its start position, and counts one
-cycle. Servos can be paused and resumed individually or all at once.
+cycle. Servos can be paused and resumed individually or all at once, and each servo's start position and sweep
+can be fine-tuned on the touchscreen, in steps of about 0.13°, and saved.
 
 | Folder | What it is |
 |---|---|
 | `CycleTester/` | **The sketch.** Open `CycleTester/CycleTester.ino` in the Arduino IDE. |
-| `tools/ServoRangeTest/` | A small helper sketch to measure your servos' real travel. **Run this first.** |
+| `tools/ServoRangeTest/` | A small helper sketch to explore a servo's travel from the Serial Monitor. Optional now: the on-screen CALIBRATE does the fine tuning. |
 | `tests/host/` | A PC simulation of the sketch (no hardware needed), used to test the logic and preview the screens. |
 | `SATv3_oasistest/` | Your earlier Snap & Test sketch, untouched. |
 
@@ -57,16 +58,14 @@ that did nothing useful, and it is not repeated here.
 
 ## 3. First run, in this order
 
-1. **Run `tools/ServoRangeTest`** (Serial Monitor, 115200 baud, line ending "Newline"). Servos powered, **no product on the fixture**.
-   * Type `all 1500` (centre). Then step each way, e.g. `1 600`, `1 550`, `1 500`, and `1 2400`, `1 2500`.
-   * Find the pulse width where the arm reaches each physical end, and stop where it stops moving or the servo hums.
-   * Measure the angle between the `500` and `2500` positions. **That tells you whether yours are 180° or 270° servos.**
-     Sellers list this ANNIMOS 35 KG family both ways, and the listing for your exact model contradicts itself.
-2. **Edit `CycleTester/Config.h`** to match (section "SERVO CALIBRATION"):
-   * 180° servo: leave `SERVO_FULL_TRAVEL_DEG = 180` and `SWEEP_START_OFFSET_DEG = 0` (sweep = 500 → 2500 µs).
-   * 270° servo: `SERVO_FULL_TRAVEL_DEG = 270` and `SWEEP_START_OFFSET_DEG = 45` (sweep = 833 → 2167 µs, centred).
-   * If one servo needs trimming, overwrite its entry in `SERVO_START_US[]` / `SERVO_END_US[]`.
-3. Upload `CycleTester`, run a short test (100 cycles) with a light load, and watch the first few cycles.
+1. **Check the servo type in `CycleTester/Config.h`.** The factory settings are for the **270° version** of the servo
+   (`SERVO_FULL_TRAVEL_DEG = 270`, `SWEEP_START_OFFSET_DEG = 45`: a 180° sweep centred in the travel, 833 → 2167 µs).
+   For a 180° servo set `180` and `0` (sweep = 500 → 2500 µs). Sellers list this ANNIMOS 35 KG family both ways, so check yours.
+2. Upload `CycleTester`. With servos powered and **no product on the fixture**, tap **CALIBRATE** and set each servo's
+   start and end (see "Calibration screen" below), then **SAVE**.
+3. Run a short test (100 cycles) with a light load and watch the first few cycles.
+
+(`tools/ServoRangeTest` is still there if you want to explore a servo's full travel from the Serial Monitor.)
 
 ## 4. Using it
 
@@ -78,10 +77,32 @@ These are renders produced by the PC simulation (`tests/host`) using the display
 
 **Setup screen:** each servo has `-1000 -100 [count] +100 +1000` buttons. Hold a button to repeat. `OFF` (0) leaves that
 servo out of the test. `ALL = S1` copies servo 1's count to every servo. The estimated run time is shown above START.
+**CALIBRATE** opens the calibration screen (below).
 
 **Run screen:** each row shows the cycle count, the target, a progress bar, the state, and a **PAUSE / RESUME** button for that servo.
 The bottom bar has **PAUSE ALL**, **RESUME ALL** and **SETUP**. SETUP asks "SURE?" (tap again within 3 s) because it ends
 the test and the counts are lost. When everything has finished it becomes **NEW TEST**.
+
+### Calibration screen
+
+![Calibration screen](docs/screenshots/calibrate.png)
+
+Use it to set, for each servo, **where the sweep starts** and **how far it goes**, to a fraction of a degree. It is for
+mounting tolerance: a servo horn can only be fitted in steps of about 14° (a 25-tooth spline), so software trims the
+rest. Only the servo you are adjusting is switched on, and the arm follows every press so you can watch it and measure.
+
+* **S1 – S4** pick the servo. Picking one does not move it; the first jog or GO does.
+* **START row** moves the **whole sweep**: start and end together, so a 180° sweep stays 180°. Use this to set where the cycle starts.
+* **END row** moves **only the end**. Use it to make the sweep exactly 180° (measure with a protractor or your fixture).
+* **Step buttons** `-25 -5 -1 +1 +5 +25` are in microseconds of pulse width. **1 µs ≈ 0.13°**, 5 µs ≈ 0.7°, 25 µs ≈ 3.4° on a 270° servo.
+  Hold a button to repeat. The servo's own dead band (about 2–3 µs) means the arm can be placed to roughly ±0.3°.
+* **GO START / GO END** glide the arm to that end at a gentle speed (`CAL_SLEW_US_PER_SEC`). **DEFAULT** puts this servo back to the `Config.h` values.
+* **SAVE** stores all four servos in the Mega's EEPROM, so they survive power-off. **BACK** asks "DISCARD?" if there are unsaved changes.
+* The line "Sweep … = … deg" converts the pulse span to degrees using the nominal 270° / 500–2500 µs figures. Your real servo can differ a few percent:
+  when the arm measures a true 180° and the screen says, say, 176.7, that is your servo's real scale, not an error.
+* Limits: values stay inside 500–2500 µs, and START and END never come closer than 100 µs. Swapping the ends (END below START) reverses a servo's direction.
+* Calibration is only available between tests (the button warns "Servos still moving" while they return home after a test).
+* If you change the servo settings in `Config.h` (travel, offset, pulse limits or the per-servo factory values), saved calibration is discarded automatically so your edit takes effect; the screen says "Config changed, saved cal reset". Set `USE_SAVED_CALIBRATION = false` to always use `Config.h`.
 
 How it behaves:
 
@@ -102,12 +123,17 @@ How it behaves:
 | `DONE_SETTLE_MS`, `ATTACH_SETTLE_MS` | 500, 600 | Settling time before a finished servo is released, and at the start position before the first sweep. |
 | `START_STAGGER_MS` | 250 | Gap between servos switching on (0 = all together). |
 | `DETACH_WHEN_DONE` | true | Release a servo when it has finished. |
-| `SERVO_FULL_TRAVEL_DEG`, `SWEEP_START_OFFSET_DEG`, `SERVO_START_US[]`, `SERVO_END_US[]` | 180, 0, 500, 2500 | Servo calibration, see above. |
+| `SERVO_FULL_TRAVEL_DEG`, `SWEEP_START_OFFSET_DEG` | 270, 45 | Factory servo type and where the 180° sweep sits in its travel. 180° servo: `180`, `0`. |
+| `SERVO_START_US[]`, `SERVO_END_US[]` | 833, 2167 | Factory per-servo ends of the sweep (derived from the two lines above). Fine tuning is done on the CALIBRATE screen. |
+| `USE_SAVED_CALIBRATION` | true | Use values saved on the calibration screen. |
+| `CAL_STEP_US[]`, `CAL_MIN_SWEEP_US`, `CAL_SLEW_US_PER_SEC` | 1/5/25, 100, 600 | Jog step sizes (µs), shortest allowed sweep, and glide speed on the calibration screen. |
 | `DEFAULT_TARGET_CYCLES`, `MAX_TARGET_CYCLES`, `STEP_SMALL/LARGE` | 1000, 999900, 100/1000 | Setup screen. |
 | `TOUCH_POLL_MS`, `TOUCH_THRESHOLD`, `REPEAT_*` | 25, 40, … | Touch behaviour. |
 | `SERIAL_LOG`, `TOUCH_DEBUG` | true, false | Serial Monitor output at 115200 baud. |
 
 With the defaults one cycle takes 4.5 s (2 × 2 s sweeps + 2 × 0.25 s rests).
+
+The servo-pulse limits `MINIMUM_PULSE_WIDTH` / `MAXIMUM_PULSE_WIDTH` at the top of `Config.h` are not settings to tune: they work around a bug in how the Servo library handles ServoEasing's default range (see design notes).
 
 ## 6. Customising the screens later
 
@@ -125,17 +151,20 @@ Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches th
 * **Touch is polled every 25 ms, with one I2C read.** Constant I2C traffic delays the servo timer interrupt and shows up as jitter (your earlier sketch hit this). The Adafruit touch library does not check whether an I2C read succeeded, so a failed read can return random data; to be safe a press must be seen on two polls in a row, and a release needs two empty polls.
 * **Text is drawn by the sketch's own small routine**, not `Print_String()`, which (as called in your earlier sketch) builds a heap-allocated `String` on every call. The sketch allocates no memory while running, which matters for multi-day runs.
 * **A servo that fails to attach reports FAULT** instead of silently counting cycles it never made.
+* **Pulses above 2476 µs used to be silently clipped.** ServoEasing attaches the Servo library with its default 400–3500 µs range, but the AVR Servo library stores that range in signed 8-bit numbers that overflow, so the effective maximum became 2476 µs. With the old 180° defaults the 2500 µs end pulse was really sent as 2476 µs. `Config.h` now sets `MINIMUM_PULSE_WIDTH 400` / `MAXIMUM_PULSE_WIDTH 2600` before ServoEasing is included, which keeps the range within 8-bit limits. The PC simulation reproduces the real clip, so a regression is caught.
+* **The calibration screen drives the pulse width directly** (`Servo::writeMicroseconds`), because ServoEasing's degree scale is fixed when it is attached. After calibrating, the servo is released and re-attached with the new end points before the next test, so the two never disagree.
+* **Saved calibration carries a signature of the servo settings in `Config.h`** plus a checksum. Values measured for one configuration are never applied to another, and a damaged or blank EEPROM falls back to the `Config.h` values.
 
 ## 8. What has and has not been verified
 
 Verified in this repository (no hardware available):
 
-* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 35.4 KB (13 %), RAM ≈ 3.0 KB (36 %).
-* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, and the 270° configuration. 101 checks pass.
+* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 42.2 KB (16 %), RAM ≈ 3.7 KB (45 %).
+* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, and both the 270° (factory) and 180° configurations. For the calibration screen it checks the 1 µs step size, that START moves both ends and END only the end, the pulse limits, slow glides, EEPROM save / reload / damaged / wrong-configuration / blank cases, that saving unchanged values writes nothing, and that a real test then uses the calibrated range. 158 checks pass (21 more in the 180° run).
 
 **Not** verified, because they need your hardware:
 
-* Whether your servos are 180° or 270° and where their real end stops are (run `ServoRangeTest`).
+* Where your servos' real end stops are, and the exact degrees per microsecond of each servo (measure with CALIBRATE).
 * The real display's drawing speed, colours, and touch alignment. The drawing speed in the simulation comes from reading the display library's code.
 * Servo current draw and your power supply under load.
 * The vendor `LCDWIKI_SPI` library itself. It was compiled against the public GitHub copy with `ST7796S` defined, because that copy does not support your display.
@@ -151,8 +180,10 @@ I could not open the Amazon listing for the servo from the development environme
 | "Touch controller not found" | Reseat the CTP_INT wire (pin 2), then check SDA/SCL and power. The sketch keeps retrying and carries on once it finds the controller. |
 | Touches land in the wrong place | Set `TOUCH_DEBUG = true`, open the Serial Monitor, and compare the printed screen coordinates with where you touched. The mapping is in `readTouch()` in `Ui.cpp`. |
 | Blank or white screen | Wrong `LCDWIKI_SPI` version (needs `ST7796S` support), or the LED pin is not on 5 V. |
-| Arm travels 120° instead of 180° (or hits the end stop) | `SERVO_FULL_TRAVEL_DEG` does not match the servo. Re-run `ServoRangeTest`. |
-| Servo hums at an end stop | Pull `SERVO_START_US` / `SERVO_END_US` in by 20 – 30 µs. |
+| Arm travels more or less than 180° | Use CALIBRATE: adjust END until the arm is exactly 180° from START, then SAVE. If it is far off, `SERVO_FULL_TRAVEL_DEG` does not match the servo (270 or 180). |
+| Servo hums at an end stop | Use CALIBRATE to pull START / END in by 20 – 30 µs (about 3°) from the end. |
+| "Config changed, saved cal reset" | You edited the servo settings in `Config.h`, so earlier saved calibration was discarded on purpose. Calibrate and SAVE again. |
+| CALIBRATE says "Servos still moving" | The servos are still returning home after a test. Wait a few seconds and tap again. |
 | Mega resets when servos start | Supply sagging: separate supply for the Mega, bigger capacitor, check wire gauge, raise `START_STAGGER_MS`. |
 | Small jitter while holding | A digital servo with a 2 – 3 µs dead band reacts to tiny pulse-width changes; check supply decoupling. Each touch read briefly occupies the I2C interrupt, which can nudge the servo pulses by a few µs; raise `TOUCH_POLL_MS` to 40 – 50 to reduce it. Servos are released when finished. |
 | Compile error about `ST7796S` | You have the public GitHub `LCDWIKI_SPI`. Use the copy from the Hosyond / LCDWIKI download. |
@@ -163,5 +194,5 @@ I could not open the Amazon listing for the servo from the development environme
 cd tests/host
 make            # runs all checks (needs g++)
 make pictures   # also saves PNGs of the screens in out/ (needs Python 3 + Pillow)
-make test270    # same, with the 270° servo settings
+make test180    # same, with the 180° servo settings
 ```
