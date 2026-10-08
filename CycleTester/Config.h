@@ -58,7 +58,9 @@ const uint8_t TOUCH_INT_PIN = 2;
 // THE universal speed knob: how fast every servo moves, in degrees per second.
 //
 // The time for one 180 degree sweep is 180 / speed:   45 -> 4.0 s,   90 -> 2.0 s,   180 -> 1.0 s.
-// One full cycle (out and back) is two sweeps plus the two dwells below.
+// One full cycle (out and back) is two sweeps plus the two dwells below, so
+//     speed = 360 / (wanted cycle time in seconds - the two dwells in seconds)
+// e.g. a 3 s cycle with 0.25 s dwells:  360 / (3 - 0.5) = 144.
 //
 // With sine easing the instantaneous peak is about 1.57x this value. The servo itself tops out
 // at roughly 430 deg/s with no load at 7.4 V, so stay well below that. Allowed range: 5 .. 400.
@@ -90,13 +92,10 @@ const uint16_t DONE_SETTLE_MS = 500;
 const uint16_t ATTACH_SETTLE_MS = 600;
 
 // ===========================================================================
-// SERVO CALIBRATION  (factory defaults - fine tuning is done on the CALIBRATE screen)
+// SERVO POSITIONS  - where each servo starts and how far it sweeps (see README, "Fine tuning")
 // ===========================================================================
 // These servos take 500..2500 us pulses (1500 us = centre). Yours turn out to be the 270 degree
 // version, so a 180 degree sweep uses only the middle two thirds of the travel.
-// Everything in this section is the STARTING POINT. On the touchscreen, CALIBRATE lets you tune each
-// servo's start and end to a fraction of a degree and SAVE it; saved values override these defaults
-// until you change something in this section of Config.h (then the saved values are discarded).
 
 const int SERVO_PULSE_MIN_US = 500;        // pulse at one end of the servo's full travel
 const int SERVO_PULSE_MAX_US = 2500;       // pulse at the other end of its full travel
@@ -104,51 +103,48 @@ const int SERVO_PULSE_MAX_US = 2500;       // pulse at the other end of its full
 // How far the arm turns between SERVO_PULSE_MIN_US and SERVO_PULSE_MAX_US:  180  or  270.
 const int SERVO_FULL_TRAVEL_DEG = 270;
 
-// Where the 180 degree sweep begins, measured from the MIN end of the full travel.
+// Where the 180 degree sweep begins, measured from the MIN end of the full travel. All four servos.
 //   180 degree servo:  0   (sweep uses the whole travel)
 //   270 degree servo:  45  (sweep is centred, 45 degrees of spare travel on each side)
+// This is the coarse setting. Use SERVO_START_TRIM_DEG below to fine tune each servo.
 const int SWEEP_START_OFFSET_DEG = 45;
 
 // The sweep is always 180 degrees, out and back.
 const int SWEEP_DEG = 180;
 
-// Derived pulse widths for the two ends of the sweep. Do not edit these two lines.
-constexpr int pulseAtDeg(int deg) {   // rounds to the nearest microsecond
-  return SERVO_PULSE_MIN_US + (int)(((long)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * deg + SERVO_FULL_TRAVEL_DEG / 2) / SERVO_FULL_TRAVEL_DEG);
-}
-constexpr int DEFAULT_START_US = pulseAtDeg(SWEEP_START_OFFSET_DEG);
-constexpr int DEFAULT_END_US   = pulseAtDeg(SWEEP_START_OFFSET_DEG + SWEEP_DEG);
+// ---- Fine tuning in degrees: one number per servo, in the order S1, S2, S3, S4 --------------------------
+//
+// SERVO_START_TRIM_DEG   Moves a servo's whole sweep (its start AND its end) by this many degrees, so
+//                        the sweep stays exactly the same size. Decimals are fine: 0.5, -1.25, ...
+//                        Positive turns the arm towards the MAX-pulse end of its travel, negative towards
+//                        the MIN end. If your arm moves the way you did not expect, flip the sign.
+//
+// SERVO_MEASURED_SWEEP_DEG  How far the arm REALLY turned (measured with a protractor or your fixture) when the
+//                        sketch was asked for a 180 degree sweep. Leave at 180.0 until you have measured it.
+//                        If the arm turned 177.5, type 177.5 and the sketch widens its sweep to make up for it.
+//
+// Smallest step: one pulse width step is about 0.135 degrees on a 270 degree servo (0.09 on a 180 degree
+// one). The servo's own dead band (2-3 us) limits how finely the arm can really be placed, to roughly 0.3 degrees.
+constexpr float SERVO_START_TRIM_DEG[NUM_SERVOS]      = {   0.0f,   0.0f,   0.0f,   0.0f };
+constexpr float SERVO_MEASURED_SWEEP_DEG[NUM_SERVOS]  = { 180.0f, 180.0f, 180.0f, 180.0f };
 
-// Per-servo factory ends of the sweep, in microseconds. "Start" is where a cycle begins and ends.
-// All four default to the values above. Swapping START and END reverses that servo's direction.
-constexpr int SERVO_START_US[NUM_SERVOS] = { DEFAULT_START_US, DEFAULT_START_US, DEFAULT_START_US, DEFAULT_START_US };
-constexpr int SERVO_END_US[NUM_SERVOS]   = { DEFAULT_END_US,   DEFAULT_END_US,   DEFAULT_END_US,   DEFAULT_END_US   };
+// ---- Derived pulse widths. Do not edit this block ----------------------------------------------------
+constexpr int roundToInt(float v) { return (int)(v < 0.0f ? v - 0.5f : v + 0.5f); }
+// microseconds for a position given in degrees from the MIN end of the full travel
+constexpr int pulseAtDeg(float deg) { return SERVO_PULSE_MIN_US + roundToInt((float)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * deg / (float)SERVO_FULL_TRAVEL_DEG); }
+constexpr float startDegFor(int i) { return (float)SWEEP_START_OFFSET_DEG + SERVO_START_TRIM_DEG[i]; }
+constexpr float endDegFor(int i)   { return startDegFor(i) + (float)SWEEP_DEG * (float)SWEEP_DEG / SERVO_MEASURED_SWEEP_DEG[i]; }
 
-// ---- Calibration screen -------------------------------------------------
-// Use the calibration values saved on the touchscreen. Set to false to always use the numbers above.
-const bool USE_SAVED_CALIBRATION = true;
-
-// Jog buttons on the calibration screen, in microseconds: small, medium, large. With a 270 degree servo
-// 1 us is about 0.13 degrees, so the smallest button moves the arm by about an eighth of a degree.
-// (The servo's own dead band, about 2-3 us, is the limit of how finely the arm can really be placed.)
-constexpr uint8_t CAL_STEP_US[3] = { 1, 5, 25 };
-
-// The arm may never be set closer than this between its start and end (keeps a sweep from collapsing).
-const uint16_t CAL_MIN_SWEEP_US = 100;
-
-// A calibration move this small is written at once, so a held jog button follows your finger. A bigger
-// move (for example switching from the START row to the END row) glides at CAL_SLEW_US_PER_SEC instead,
-// so the arm never whips across the sweep. Keep it at least twice the largest CAL_STEP_US.
-const uint16_t CAL_DIRECT_MAX_US = 50;
-
-// How fast the arm glides when you press GO START / GO END, in microseconds per second
-// (600 us per second is roughly 80 degrees per second on a 270 degree servo).
-const uint16_t CAL_SLEW_US_PER_SEC = 600;
+// The ends of each servo's sweep in microseconds. "Start" is where a cycle begins and ends.
+// Advanced: you may replace any entry by a plain number (for example one measured with tools/ServoRangeTest);
+// the trim and measured-sweep numbers above are then ignored for that servo. Swapping a servo's START and
+// END makes it sweep the other way.
+constexpr int SERVO_START_US[NUM_SERVOS] = { pulseAtDeg(startDegFor(0)), pulseAtDeg(startDegFor(1)), pulseAtDeg(startDegFor(2)), pulseAtDeg(startDegFor(3)) };
+constexpr int SERVO_END_US[NUM_SERVOS]   = { pulseAtDeg(endDegFor(0)),   pulseAtDeg(endDegFor(1)),   pulseAtDeg(endDegFor(2)),   pulseAtDeg(endDegFor(3))   };
 
 // Compile-time sanity checks. If one of these fires, the message says what to fix.
-constexpr bool pulseInLimits(int us) { return us >= SERVO_PULSE_MIN_US && us <= SERVO_PULSE_MAX_US; }
-constexpr int  absInt(int v) { return v < 0 ? -v : v; }
-constexpr bool sweepLongEnough(int startUs, int endUs) { return absInt(endUs - startUs) >= (int)CAL_MIN_SWEEP_US; }
+constexpr bool pulseInLimits(int us)   { return us >= SERVO_PULSE_MIN_US && us <= SERVO_PULSE_MAX_US; }
+constexpr bool measuredPlausible(float deg) { return deg >= 90.0f && deg <= 270.0f; }
 static_assert(SERVO_SPEED_DEG_PER_SEC >= 5 && SERVO_SPEED_DEG_PER_SEC <= 400,
               "SERVO_SPEED_DEG_PER_SEC must be between 5 and 400");
 static_assert(SERVO_FULL_TRAVEL_DEG == 180 || SERVO_FULL_TRAVEL_DEG == 270,
@@ -157,14 +153,12 @@ static_assert(SWEEP_START_OFFSET_DEG >= 0 && SWEEP_START_OFFSET_DEG + SWEEP_DEG 
               "The 180 degree sweep does not fit inside the servo's travel: lower SWEEP_START_OFFSET_DEG");
 static_assert(SERVO_PULSE_MIN_US >= MINIMUM_PULSE_WIDTH && SERVO_PULSE_MAX_US <= MAXIMUM_PULSE_WIDTH && SERVO_PULSE_MIN_US < SERVO_PULSE_MAX_US,
               "Servo pulse widths must be inside 400..2600 us and MIN must be below MAX");
+static_assert(measuredPlausible(SERVO_MEASURED_SWEEP_DEG[0]) && measuredPlausible(SERVO_MEASURED_SWEEP_DEG[1]) &&
+              measuredPlausible(SERVO_MEASURED_SWEEP_DEG[2]) && measuredPlausible(SERVO_MEASURED_SWEEP_DEG[3]),
+              "Every SERVO_MEASURED_SWEEP_DEG must be between 90 and 270 degrees");
 static_assert(pulseInLimits(SERVO_START_US[0]) && pulseInLimits(SERVO_START_US[1]) && pulseInLimits(SERVO_START_US[2]) && pulseInLimits(SERVO_START_US[3]) &&
               pulseInLimits(SERVO_END_US[0])   && pulseInLimits(SERVO_END_US[1])   && pulseInLimits(SERVO_END_US[2])   && pulseInLimits(SERVO_END_US[3]),
-              "Every SERVO_START_US / SERVO_END_US value must lie between SERVO_PULSE_MIN_US and SERVO_PULSE_MAX_US");
-static_assert(sweepLongEnough(SERVO_START_US[0], SERVO_END_US[0]) && sweepLongEnough(SERVO_START_US[1], SERVO_END_US[1]) &&
-              sweepLongEnough(SERVO_START_US[2], SERVO_END_US[2]) && sweepLongEnough(SERVO_START_US[3], SERVO_END_US[3]),
-              "Each servo's SERVO_START_US and SERVO_END_US must be at least CAL_MIN_SWEEP_US apart");
-static_assert(CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[0] && CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[1] && CAL_DIRECT_MAX_US >= 2 * CAL_STEP_US[2],
-              "CAL_DIRECT_MAX_US should be at least twice the largest CAL_STEP_US"); 
+              "A servo's start or end pulse falls outside SERVO_PULSE_MIN_US..SERVO_PULSE_MAX_US: reduce that servo's SERVO_START_TRIM_DEG or SERVO_MEASURED_SWEEP_DEG");
 
 // ===========================================================================
 // TEST SETUP SCREEN

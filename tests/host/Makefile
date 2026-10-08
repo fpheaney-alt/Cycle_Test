@@ -3,7 +3,8 @@
 #   make            build and run the full simulation (takes a few seconds)
 #   make pictures   also turn the saved screens in out/ into PNG files (needs Pillow)
 #   make test180    run again with the settings for a 180 degree servo
-#   make testnosave run again with saved calibration switched off in Config.h
+#   make testtrim   run again with non-zero degree trims / measured sweeps in Config.h
+#   make testguards check that out-of-range Config.h values are refused at compile time
 #   make clean
 #
 # The simulation compiles the real sketch sources from ../../CycleTester together with the fake
@@ -15,10 +16,10 @@ CXX    ?= g++
 WARN     = -std=gnu++11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 CXXFLAGS = $(WARN) -Imocks -I$(SKETCH)
 
-SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Calibration.cpp $(SKETCH)/Calibration.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h \
+SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h \
       $(SKETCH)/Config.h $(SKETCH)/CycleTester.ino $(SKETCH)/Font5x7.h $(wildcard mocks/*.h mocks/*.hpp)
 
-.PHONY: all run pictures test180 testnosave clean
+.PHONY: all run pictures test180 testtrim testguards clean
 all: run
 
 sim: $(SRC)
@@ -32,6 +33,7 @@ pictures: run
 	python3 render.py out
 
 # Same simulation with a 180 degree servo (the factory default is 270): the sweep is the servo's whole travel, 500..2500 us.
+# 2500 us is above the 2476 us the Servo library clips at unless Config.h raises its limit, so this also proves that fix.
 test180:
 	rm -rf build/cfg180 && mkdir -p build/cfg180 out
 	cp $(SKETCH)/* build/cfg180/
@@ -39,12 +41,17 @@ test180:
 	grep -n "SERVO_FULL_TRAVEL_DEG =\|SWEEP_START_OFFSET_DEG =" build/cfg180/Config.h
 	$(CXX) $(WARN) -Imocks -Ibuild/cfg180 sim.cpp -o build/sim180 && ./build/sim180 --short
 
-# Same simulation with USE_SAVED_CALIBRATION = false: SAVE must refuse and leave the stored values alone.
-testnosave:
-	rm -rf build/cfgnosave && mkdir -p build/cfgnosave out
-	cp $(SKETCH)/* build/cfgnosave/
-	sed -i 's/USE_SAVED_CALIBRATION = true;/USE_SAVED_CALIBRATION = false;/' build/cfgnosave/Config.h
-	$(CXX) $(WARN) -Imocks -Ibuild/cfgnosave sim.cpp -o build/simnosave && ./build/simnosave --nosave
+# Same simulation with fine-tuning numbers in Config.h; the pulse widths must come out as worked out by hand (see scenarioTrim).
+testtrim:
+	rm -rf build/cfgtrim && mkdir -p build/cfgtrim out
+	cp $(SKETCH)/* build/cfgtrim/
+	sed -i 's/\(SERVO_START_TRIM_DEG\[NUM_SERVOS\] *= *\){[^}]*}/\1{ 2.0f, -1.5f, 0.5f, 0.0f }/; s/\(SERVO_MEASURED_SWEEP_DEG\[NUM_SERVOS\] *= *\){[^}]*}/\1{ 180.0f, 180.0f, 177.5f, 183.0f }/' build/cfgtrim/Config.h
+	grep -n "^constexpr float SERVO_" build/cfgtrim/Config.h
+	$(CXX) $(WARN) -Imocks -Ibuild/cfgtrim sim.cpp -o build/simtrim && ./build/simtrim --short --trim
+
+# Values that would drive a pulse outside the servo's range, or a nonsense measured sweep, must stop the compile.
+testguards:
+	./check_guards.sh $(SKETCH) "$(CXX)" "$(WARN)"
 
 clean:
 	rm -rf sim out build
