@@ -115,7 +115,7 @@ You do not have to upload after every try. Type the number in the Serial Monitor
 
 | Type | What happens |
 |---|---|
-| `S1 -5.0` | S1 goes to its **start** position with a start trim of -5.0°. This is exactly the number that goes in `SERVO_START_TRIM_DEG`. A trailing `f`, as in `-5.0f`, is fine, and so is lower case. |
+| `S1 -5.0` | S1 goes to its **start** position shifted by 5.0° (a trim of -5.0). The number is a **small shift from the normal start, not an angle**: 0 is the normal start, and on a 270° servo it can only go from about -45 to +45. It is exactly the number that goes in `SERVO_START_TRIM_DEG`. A trailing `f`, as in `-5.0f`, is fine, and so is lower case. |
 | `S1 -5.0 end` | The same trim, but go to the **end** of the sweep. |
 | `S1 start` / `S1 end` | Go to the start / end with the numbers typed so far. |
 | `S1 sweep 177.5` | Say that the arm turned 177.5° when 180° was asked for, and go to the end of the corrected sweep. This is the number for `SERVO_MEASURED_SWEEP_DEG`. |
@@ -197,8 +197,8 @@ Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches th
 
 Verified in this repository (no hardware available):
 
-* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 41.8 KB (16 %), RAM ≈ 3.2 KB (39 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
-* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, the 270° configuration, and the typed position commands (parsing, glide speed, refusals, switching off, a test taking over from typed positions). 169 checks pass.
+* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 42.1 KB (16 %), RAM ≈ 3.2 KB (39 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
+* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, the 270° configuration, and the typed position commands (parsing, glide speed, refusals, switching off, a test taking over from typed positions). 171 checks pass.
   * `make test180` repeats the pulse-range checks for a 180° servo (21 checks). Its 2500 µs end pulse would be clipped to 2476 µs by the Servo library without the fix in `Config.h`, so it also guards that fix.
   * `make testtrim` sets non-zero `SERVO_START_TRIM_DEG` and `SERVO_MEASURED_SWEEP_DEG` values and checks the resulting pulse widths against numbers worked out separately, that the start moves by the trim, and that a servo whose measured sweep was corrected turns a true 180° (31 checks).
   * `make testguards` checks that out-of-range trims or measured sweeps are refused at compile time with a readable message (5 cases).

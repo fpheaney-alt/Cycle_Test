@@ -497,6 +497,10 @@ static void scenarioSerialCommands() {
   m = serialMark();
   typeLine("S1 60");
   CHECK(said(m, "start would be") && said(m, "500..2500"), "an out-of-range trim says what the pulses would have been");
+  CHECK(said(m, "between -45.0 and 45.0 degrees"), "and the trim range that does fit (-45.0 to 45.0 for a 180 degree sweep)");
+  m = serialMark();
+  typeLine("S4 190.0");
+  CHECK(said(m, "refused") && said(m, "between -45.0 and 48.0 degrees") && chan(3).startUs() == 833, "typing an angle such as 190.0 is refused with the range (S4 has a 183 sweep, so -45.0 to 48.0), and S4 stays put");
 
   // 5. odd but harmless input: extra spaces, Windows line endings, a very long line, then normal use again
   Serial.typeText("  S1    2.0   end \r\n");

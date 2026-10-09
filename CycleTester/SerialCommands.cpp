@@ -24,7 +24,7 @@ void servoName(uint8_t i) { Serial.print(F("S")); Serial.print(i + 1); Serial.pr
 
 void printHelp() {
   Serial.println(F("Position commands (only between tests). Servo is S1..S4 or ALL:"));
-  Serial.println(F("  S1 -5.0         S1 to its START with a start trim of -5.0 degrees"));
+  Serial.println(F("  S1 -5.0         S1 to its START, shifted 5.0 degrees (a trim, not an angle: 0 = normal start)"));
   Serial.println(F("  S1 -5.0 end     the same trim, but go to the END of the sweep"));
   Serial.println(F("  S1 start | end  go to the start / end with the numbers set so far"));
   Serial.println(F("  S1 sweep 177.5  say the arm turned 177.5 degrees for 180, and go to the END"));
@@ -113,6 +113,13 @@ void tryValues(uint8_t i, float trim, float sweep, bool toEnd) {
     Serial.print(F(" us, but only ")); Serial.print(SERVO_PULSE_MIN_US);
     Serial.print(F("..")); Serial.print(SERVO_PULSE_MAX_US);
     Serial.println(F(" us is allowed"));
+    // The trim is a shift in degrees from the normal start (not an angle), so say how far it can go.
+    servoName(i);
+    Serial.print(F("the trim is a shift from the normal start; with this sweep it must be between "));
+    Serial.print(-(float)SWEEP_START_OFFSET_DEG, 1);
+    Serial.print(F(" and "));
+    Serial.print((float)SERVO_FULL_TRAVEL_DEG - (float)SWEEP_START_OFFSET_DEG - (float)SWEEP_DEG * (float)SWEEP_DEG / sweep, 1);
+    Serial.println(F(" degrees"));
     return;
   }
   if (!moveTo(i, s, e, toEnd)) return;
