@@ -7,7 +7,7 @@
 
 #include "Ui.h"
 #include "Config.h"
-#include "Font5x7.h"
+#include "UiFonts.h"
 
 // ===========================================================================
 // HARDWARE
@@ -18,54 +18,60 @@ static Adafruit_FT6206 ctp;
 // ===========================================================================
 // LOOK AND LAYOUT - everything you would change to restyle the screens is in this section
 // ===========================================================================
+// The look follows Apple's dark mode: black background, grouped "cards", soft gray buttons, system blue for
+// the main action, and the Inter typeface (a close relative of Apple's San Francisco).
 const int16_t SCREEN_W = 480;      // landscape, after Set_Rotation(3)
 const int16_t SCREEN_H = 320;
-const int16_t HEADER_H = 32;
 
 constexpr uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
-const uint16_t COL_BG       = rgb565(8, 10, 18);
-const uint16_t COL_PANEL    = rgb565(24, 30, 46);
-const uint16_t COL_BORDER   = rgb565(70, 82, 112);
-const uint16_t COL_BUTTON   = rgb565(48, 60, 92);
-const uint16_t COL_TEXT     = rgb565(255, 255, 255);
-const uint16_t COL_DIM      = rgb565(140, 150, 175);
-const uint16_t COL_ACCENT   = rgb565(0, 200, 255);
-const uint16_t COL_GOOD     = rgb565(40, 205, 95);
-const uint16_t COL_WARN     = rgb565(255, 175, 0);
-const uint16_t COL_BAD      = rgb565(235, 65, 65);
-const uint16_t COL_ON_BRIGHT = rgb565(8, 10, 18);   // dark text drawn on the bright green / amber / red buttons
+const uint16_t COL_BG      = rgb565(0, 0, 0);          // screen
+const uint16_t COL_CARD    = rgb565(28, 28, 30);       // grouped cards
+const uint16_t COL_FILL    = rgb565(58, 58, 62);       // gray buttons, empty progress tracks
+const uint16_t COL_SEP     = rgb565(56, 56, 58);       // hairlines between rows
+const uint16_t COL_TEXT    = rgb565(255, 255, 255);    // primary label
+const uint16_t COL_TEXT2   = rgb565(152, 152, 159);    // secondary label
+const uint16_t COL_TEXT3   = rgb565(99, 99, 104);      // tertiary label, disabled
+const uint16_t COL_BLUE    = rgb565(10, 132, 255);
+const uint16_t COL_GREEN   = rgb565(48, 209, 88);
+const uint16_t COL_ORANGE  = rgb565(255, 159, 10);
+const uint16_t COL_RED     = rgb565(255, 69, 58);
+const uint16_t COL_BLUE_TINT   = rgb565(24, 48, 75);   // the same colours at 20 % over a card, for "tinted" buttons
+const uint16_t COL_GREEN_TINT  = rgb565(32, 64, 42);
+const uint16_t COL_ORANGE_TINT = rgb565(73, 54, 26);
 
-const int16_t BUTTON_RADIUS = 8;
+const int16_t BUTTON_RADIUS = 12;
+const int16_t CARD_RADIUS   = 14;
+const int16_t MARGIN        = 12;       // space between the screen edge and the cards
 
-// --- Setup screen ---
-const int16_t SETUP_ROW_Y0    = 40;     // top of the first servo row
-const int16_t SETUP_ROW_STEP  = 50;
-const int16_t SETUP_ROW_H     = 44;
-const int16_t SETUP_LABEL_X   = 8;
-const int16_t SETUP_X0        = 42;     // left edge of the first (-1000) button
-const int16_t SETUP_BIG_W     = 80;     // width of the -1000 / +1000 buttons
-const int16_t SETUP_SMALL_W   = 66;     // width of the -100 / +100 buttons
-const int16_t SETUP_VALUE_W   = 112;    // width of the number box
+// --- Setup screen: one card holding four rows ---
+const int16_t SETUP_CARD_Y    = 44;
+const int16_t SETUP_ROW_H     = 46;
+const int16_t SETUP_BTN_H     = 38;     // buttons are a little shorter than their row
+const int16_t SETUP_LABEL_X   = 28;
+const int16_t SETUP_X0        = 100;    // left edge of the first (-1000) button
+const int16_t SETUP_BIG_W     = 60;     // width of the -1000 / +1000 buttons
+const int16_t SETUP_SMALL_W   = 52;     // width of the -100 / +100 buttons
+const int16_t SETUP_VALUE_W   = 108;    // width of the number between them (six digits fit)
 const int16_t SETUP_GAP       = 6;
-const int16_t SETUP_EST_Y     = 243;    // line showing the estimated run time
+const int16_t SETUP_EST_Y     = 236;    // line showing the estimated run time
 const int16_t SETUP_BOTTOM_Y  = 262;
-const int16_t SETUP_BOTTOM_H  = 50;
+const int16_t SETUP_BOTTOM_H  = 48;
 
-// --- Run screen ---
-const int16_t RUN_ROW_Y0   = 38;
-const int16_t RUN_ROW_STEP = 54;
-const int16_t RUN_ROW_H    = 50;
-const int16_t RUN_BOTTOM_Y = 258;
-const int16_t RUN_BOTTOM_H = 54;
+// --- Run screen: one card per servo ---
+const int16_t RUN_ROW_Y0   = 42;
+const int16_t RUN_ROW_STEP = 56;
+const int16_t RUN_ROW_H    = 52;
+const int16_t RUN_BOTTOM_Y = 270;
+const int16_t RUN_BOTTOM_H = 44;
 
 // ===========================================================================
 // SMALL DRAWING TOOLKIT
 // ===========================================================================
-// Text is drawn by the few lines below instead of the display library's Print_String(). Reasons:
-// it only needs Fill_Rect(); it makes no temporary String objects (no heap use over a multi-day
-// run); and it paints roughly 4x fewer rectangles per character, so redraws stall the main loop less.
+// Text is anti-aliased: each character is blended from its 4-bit coverage bitmap (UiFonts.h) between the text
+// colour and the colour behind it, and streamed to the display as one block. Because the background is a known
+// flat colour, no read-back from the display is needed. No String objects, no heap use: it runs for days.
 
 struct Rect { int16_t x, y, w, h; };
 
@@ -73,80 +79,148 @@ static void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color)
   if (w > 0 && h > 0) gfx.Fill_Rect(x, y, w, h, color);
 }
 
-// One character cell is 6x8 "font pixels" (5x7 glyph plus spacing), each font pixel scale x scale screen pixels.
-static void drawGlyph(int16_t x, int16_t y, char c, uint8_t scale, uint16_t fg, uint16_t bg) {
-  fillRect(x, y, 6 * scale, 8 * scale, bg);
-  if (c <= ' ' || (uint8_t)c > FONT_LAST_CHAR) return;
-  const uint8_t* glyph = FONT5X7 + (uint8_t)(c - FONT_FIRST_CHAR) * 5;
-  for (uint8_t col = 0; col < 5; col++) {
-    uint8_t bits = pgm_read_byte(glyph + col);
-    uint8_t row = 0;
-    while (row < 7) {
-      if (bits & (1 << row)) {
-        uint8_t first = row;
-        while (row < 7 && (bits & (1 << row))) row++;     // merge a vertical run into one rectangle
-        fillRect(x + col * scale, y + first * scale, scale, (row - first) * scale, fg);
-      } else {
-        row++;
+// Colour between bg and fg; a = 0 gives bg, 255 gives fg.
+static uint16_t mix565(uint16_t bg, uint16_t fg, uint8_t a) {
+  int16_t br = bg >> 11, bgc = (bg >> 5) & 63, bb = bg & 31;
+  int16_t fr = fg >> 11, fgc = (fg >> 5) & 63, fb = fg & 31;
+  int16_t r = br + (int16_t)(((fr - br) * (int16_t)a + (fr >= br ? 127 : -127)) / 255);
+  int16_t g = bgc + (int16_t)(((fgc - bgc) * (int16_t)a + (fgc >= bgc ? 127 : -127)) / 255);
+  int16_t b = bb + (int16_t)(((fb - bb) * (int16_t)a + (fb >= bb ? 127 : -127)) / 255);
+  return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
+static void loadGlyph(const UiFont& font, char c, UiGlyph& g) {
+  uint8_t u = (uint8_t)c;
+  if (u < UI_FIRST_CHAR || u > UI_LAST_CHAR) u = '?';
+  memcpy_P(&g, &font.glyphs[u - UI_FIRST_CHAR], sizeof(UiGlyph));
+}
+
+const uint8_t MAX_CELL_W = 32;     // widest character cell in any font (checked when the fonts are generated)
+
+// One character: a cell `advance` wide and `font.height` tall, painted completely (no separate clear needed).
+static void drawGlyph(int16_t x, int16_t y, char c, const UiFont& font, uint16_t fg, uint16_t bg) {
+  UiGlyph g;
+  loadGlyph(font, c, g);
+  uint8_t cellW = g.adv > MAX_CELL_W ? MAX_CELL_W : g.adv;
+  if (cellW == 0) return;
+  uint16_t row[MAX_CELL_W];
+  gfx.Set_Addr_Window(x, y, x + cellW - 1, y + font.height - 1);
+  const uint8_t* bits = font.bitmaps + g.offset;
+  for (uint8_t ry = 0; ry < font.height; ry++) {
+    int16_t gy = (int16_t)ry - (int16_t)font.ascent - g.yoff;      // row within the glyph bitmap
+    if (gy < 0 || gy >= g.h) {
+      for (uint8_t cx = 0; cx < cellW; cx++) row[cx] = bg;
+    } else {
+      for (uint8_t cx = 0; cx < cellW; cx++) {
+        int16_t gx = (int16_t)cx - g.xoff;
+        uint16_t color = bg;
+        if (gx >= 0 && gx < g.w) {
+          uint16_t index = (uint16_t)gy * g.w + gx;
+          uint8_t byte = pgm_read_byte(bits + (index >> 1));
+          uint8_t a = (index & 1) ? (byte & 0x0F) : (byte >> 4);
+          if (a == 15) color = fg;
+          else if (a) color = mix565(bg, fg, (uint8_t)(a * 17));
+        }
+        row[cx] = color;
       }
     }
+    gfx.Push_Any_Color(row, cellW, ry == 0, 0);
   }
 }
 
-static void drawText(int16_t x, int16_t y, const char* s, uint8_t scale, uint16_t fg, uint16_t bg) {
-  for (; *s; s++, x += 6 * scale) drawGlyph(x, y, *s, scale, fg, bg);
+static int16_t textWidth(const char* s, const UiFont& font) {
+  int16_t w = 0;
+  UiGlyph g;
+  for (; *s; s++) { loadGlyph(font, *s, g); w += g.adv; }
+  return w;
 }
 
-static int16_t textWidth(const char* s, uint8_t scale) { return (int16_t)strlen(s) * 6 * scale - scale; }
-
-static void drawTextCentered(const Rect& r, const char* s, uint8_t scale, uint16_t fg, uint16_t bg) {
-  int16_t x = r.x + (r.w - textWidth(s, scale)) / 2;
-  int16_t y = r.y + (r.h - 7 * scale) / 2;
-  drawText(x, y, s, scale, fg, bg);
+// x, y is the top-left of the first character cell.
+static void drawText(int16_t x, int16_t y, const char* s, const UiFont& font, uint16_t fg, uint16_t bg) {
+  UiGlyph g;
+  for (; *s; s++) {
+    drawGlyph(x, y, *s, font, fg, bg);
+    loadGlyph(font, *s, g);
+    x += g.adv;
+  }
 }
 
-// A piece of text that remembers what is on screen, and repaints only the characters that changed.
-// Updating a counter from 1234 to 1235 repaints one digit instead of the whole number.
-struct Field { char shown[24]; uint16_t fg; };
+// Top of a text cell so that the text's baseline lands on `baseline`, or so that capital letters are centred on `centreY`.
+static int16_t topForBaseline(const UiFont& font, int16_t baseline) { return baseline - font.ascent; }
+static int16_t topForCentre(const UiFont& font, int16_t centreY)    { return centreY + font.capHeight / 2 - font.ascent; }
 
-static void resetField(Field& f) { memset(f.shown, 0, sizeof(f.shown)); f.fg = 0; }
+static void drawTextCentered(const Rect& r, const char* s, const UiFont& font, uint16_t fg, uint16_t bg) {
+  drawText(r.x + (r.w - textWidth(s, font)) / 2, topForCentre(font, r.y + r.h / 2), s, font, fg, bg);
+}
+
+// A piece of text that remembers what is on screen. Changing it repaints only the character cells of the
+// new text, and clears whatever the old text covered that the new one does not.
+struct Field { char shown[24]; uint16_t fg; int16_t x0, x1; };
+
+static void resetField(Field& f) { memset(f.shown, 0, sizeof(f.shown)); f.fg = 0; f.x0 = f.x1 = 0; }
 
 enum Align : uint8_t { ALIGN_LEFT, ALIGN_RIGHT, ALIGN_CENTER };
 
-static void drawField(Field& f, int16_t x, int16_t y, uint8_t scale, uint16_t fg, uint16_t bg,
-                      const char* text, uint8_t width, Align align) {
-  if (width > sizeof(f.shown) - 1) width = sizeof(f.shown) - 1;
-  char line[sizeof(f.shown)];
-  memset(line, ' ', width);
-  uint8_t len = strlen(text);
-  if (len > width) {                                   // too long: keep what fits
-    if (align == ALIGN_RIGHT) text += len - width;
-    len = width;
+// The text is placed inside [x, x + width). y is the top of the character cells.
+static void drawField(Field& f, int16_t x, int16_t y, int16_t width, const UiFont& font, uint16_t fg, uint16_t bg,
+                      const char* text, Align align) {
+  if (fg == f.fg && !strncmp(f.shown, text, sizeof(f.shown) - 1)) return;
+  int16_t w = textWidth(text, font);
+  if (w > width) w = width;                                    // (never happens with the layouts used)
+  int16_t nx0 = x + (align == ALIGN_RIGHT ? width - w : align == ALIGN_CENTER ? (width - w) / 2 : 0);
+  int16_t nx1 = nx0 + w;
+  drawText(nx0, y, text, font, fg, bg);
+  if (f.x1 > f.x0) {                                           // clear what the old text covered and the new one does not
+    if (f.x0 < nx0) fillRect(f.x0, y, (f.x1 < nx0 ? f.x1 : nx0) - f.x0, font.height, bg);
+    if (f.x1 > nx1) fillRect(f.x0 > nx1 ? f.x0 : nx1, y, f.x1 - (f.x0 > nx1 ? f.x0 : nx1), font.height, bg);
   }
-  memcpy(line + (align == ALIGN_RIGHT ? width - len : align == ALIGN_CENTER ? (width - len) / 2 : 0), text, len);
+  strncpy(f.shown, text, sizeof(f.shown) - 1);
+  f.shown[sizeof(f.shown) - 1] = 0;
+  f.fg = fg;
+  f.x0 = nx0;
+  f.x1 = nx1;
+}
 
-  if (fg != f.fg) {                                    // colour changed: repaint everything
-    memset(f.shown, 0, sizeof(f.shown));
-    f.fg = fg;
-  }
-  for (uint8_t i = 0; i < width; i++) {
-    if (line[i] != f.shown[i]) {
-      drawGlyph(x + i * 6 * scale, y, line[i], scale, fg, bg);
-      f.shown[i] = line[i];
+// A rounded rectangle with smooth (anti-aliased) corners. `behind` is the colour the corners blend into.
+// Straight edges are plain rectangles; only the corner pixels are blended, using the usual
+// "distance to the arc" estimate. Radius 24 at most.
+static void fillRound(const Rect& r, int16_t rad, uint16_t color, uint16_t behind) {
+  if (r.w <= 0 || r.h <= 0) return;
+  if (rad > r.w / 2) rad = r.w / 2;
+  if (rad > r.h / 2) rad = r.h / 2;
+  if (rad > 24) rad = 24;
+  if (rad <= 0) { fillRect(r.x, r.y, r.w, r.h, color); return; }
+  fillRect(r.x + rad, r.y, r.w - 2 * rad, r.h, color);
+  fillRect(r.x, r.y + rad, rad, r.h - 2 * rad, color);
+  fillRect(r.x + r.w - rad, r.y + rad, rad, r.h - 2 * rad, color);
+
+  const long R4 = 4L * rad * rad;
+  uint8_t cover[24];
+  for (int16_t j = 0; j < rad; j++) {                          // j: rows in from the outer edge; the other corners mirror this one
+    int16_t full = rad;                                        // first column (counting in from the outer edge) that is fully covered
+    for (int16_t i = 0; i < rad; i++) {
+      long dx2 = 2L * rad - 2 * i - 1, dy2 = 2L * rad - 2 * j - 1;
+      long a = 128 + (255L * (R4 - (dx2 * dx2 + dy2 * dy2))) / (8L * rad);
+      cover[i] = (uint8_t)(a < 0 ? 0 : a > 255 ? 255 : a);
+      if (cover[i] == 255 && full == rad) full = i;
+    }
+    for (uint8_t corner = 0; corner < 4; corner++) {
+      bool right = corner & 1, bottom = corner & 2;
+      int16_t py = bottom ? r.y + r.h - 1 - j : r.y + j;
+      for (int16_t i = 0; i < full; i++) {
+        if (cover[i] == 0) continue;
+        int16_t px = right ? r.x + r.w - 1 - i : r.x + i;
+        gfx.Set_Draw_color(mix565(behind, color, cover[i]));
+        gfx.Draw_Pixel(px, py);
+      }
+      if (full < rad) fillRect(right ? r.x + r.w - rad : r.x + full, py, rad - full, 1, color);
     }
   }
 }
 
-static void drawBox(const Rect& r, uint16_t fill, uint16_t border) {
-  gfx.Set_Draw_color(fill);
-  gfx.Fill_Round_Rectangle(r.x, r.y, r.x + r.w - 1, r.y + r.h - 1, BUTTON_RADIUS);
-  gfx.Set_Draw_color(border);
-  gfx.Draw_Round_Rectangle(r.x, r.y, r.x + r.w - 1, r.y + r.h - 1, BUTTON_RADIUS);
-}
-
-static void drawButton(const Rect& r, const char* label, uint8_t scale, uint16_t fill, uint16_t textColor) {
-  drawBox(r, fill, COL_BORDER);
-  drawTextCentered(r, label, scale, textColor, fill);
+static void drawButton(const Rect& r, const char* label, const UiFont& font, uint16_t fill, uint16_t textColor, uint16_t behind) {
+  fillRound(r, BUTTON_RADIUS, fill, behind);
+  drawTextCentered(r, label, font, textColor, fill);
 }
 
 static bool inRect(const Rect& r, int16_t px, int16_t py) {
@@ -154,10 +228,8 @@ static bool inRect(const Rect& r, int16_t px, int16_t py) {
          py >= r.y - TOUCH_SLOP_PX && py < r.y + r.h + TOUCH_SLOP_PX;
 }
 
-static void drawHeader(const char* title) {
-  fillRect(0, 0, SCREEN_W, HEADER_H, COL_BG);
-  drawText(10, 9, title, 2, COL_TEXT, COL_BG);
-  fillRect(0, HEADER_H - 1, SCREEN_W, 1, COL_BORDER);
+static void drawTitle() {
+  drawText(16, topForBaseline(UI_FONT_TITLE, 31), "Cycle Tester", UI_FONT_TITLE, COL_TEXT, COL_BG);
 }
 
 // ===========================================================================
@@ -208,15 +280,15 @@ static uint32_t confirmUntil = 0;
 enum SetupPart : uint8_t { P_MINUS_L, P_MINUS_S, P_VALUE, P_PLUS_S, P_PLUS_L };
 
 static Rect setupRect(uint8_t row, SetupPart part) {
-  int16_t y = SETUP_ROW_Y0 + row * SETUP_ROW_STEP;
+  int16_t y = SETUP_CARD_Y + row * SETUP_ROW_H + (SETUP_ROW_H - SETUP_BTN_H) / 2;
   int16_t x = SETUP_X0;
   static const int16_t widths[5] = { SETUP_BIG_W, SETUP_SMALL_W, SETUP_VALUE_W, SETUP_SMALL_W, SETUP_BIG_W };
   for (uint8_t p = 0; p < part; p++) x += widths[p] + SETUP_GAP;
-  return Rect{ x, y, widths[part], SETUP_ROW_H };
+  return Rect{ x, y, widths[part], SETUP_BTN_H };
 }
 
-static const Rect COPY_BTN  = { 8,   SETUP_BOTTOM_Y, 156, SETUP_BOTTOM_H };
-static const Rect START_BTN = { 170, SETUP_BOTTOM_Y, 300, SETUP_BOTTOM_H };
+static const Rect COPY_BTN  = { MARGIN, SETUP_BOTTOM_Y, 150, SETUP_BOTTOM_H };
+static const Rect START_BTN = { 170, SETUP_BOTTOM_Y, 298, SETUP_BOTTOM_H };
 
 static void formatDuration(uint64_t seconds, char* out, size_t n) {
   unsigned long d = (unsigned long)(seconds / 86400UL);
@@ -235,10 +307,10 @@ static void drawEstimate() {
   for (uint8_t i = 0; i < NUM_SERVOS; i++) if (targets[i] > longest) longest = targets[i];
 
   char text[40];
-  uint16_t color = COL_DIM;
+  uint16_t color = COL_TEXT2;
   if (setupMessageUntil != 0) {
     snprintf(text, sizeof(text), "Set a target first");
-    color = COL_BAD;
+    color = COL_RED;
   } else if (longest == 0) {
     snprintf(text, sizeof(text), "No servos selected");
   } else {
@@ -246,54 +318,56 @@ static void drawEstimate() {
     uint32_t cycleMs = 2 * sweepMs + DWELL_AT_END_MS + DWELL_AT_START_MS;
     char dur[16];
     formatDuration((uint64_t)longest * cycleMs / 1000, dur, sizeof(dur));
-    snprintf(text, sizeof(text), "Est. run time %s", dur);
+    snprintf(text, sizeof(text), "Estimated run time %s", dur);
   }
-  drawField(setupEstimateField, 8, SETUP_EST_Y, 2, color, COL_BG, text, 22, ALIGN_LEFT);
+  drawField(setupEstimateField, SETUP_LABEL_X, SETUP_EST_Y, 300, UI_FONT_CAPTION, color, COL_BG, text, ALIGN_LEFT);
 }
 
 static void drawSetupValue(uint8_t row) {
   char text[12];
   uint16_t color;
   if (targets[row] == 0) {
-    snprintf(text, sizeof(text), "OFF");
-    color = COL_DIM;
+    snprintf(text, sizeof(text), "Off");
+    color = COL_TEXT3;
   } else {
     snprintf(text, sizeof(text), "%lu", (unsigned long)targets[row]);
     color = COL_TEXT;
   }
   Rect box = setupRect(row, P_VALUE);
-  drawField(setupValueField[row], box.x + 2, box.y + (box.h - 21) / 2, 3, color, COL_PANEL, text, 6, ALIGN_CENTER);
+  drawField(setupValueField[row], box.x, topForCentre(UI_FONT_NUM, box.y + box.h / 2), box.w, UI_FONT_NUM, color, COL_CARD, text, ALIGN_CENTER);
 }
 
 static void drawSetupScreen() {
   screen = SCREEN_SETUP;
   gfx.Fill_Screen(COL_BG);
-  drawHeader("CYCLE TESTER");
-  const char* sub = "SET CYCLES";
-  drawText(SCREEN_W - 10 - textWidth(sub, 2), 9, sub, 2, COL_ACCENT, COL_BG);
+  drawTitle();
+  const char* sub = "Cycles per servo";
+  drawText(SCREEN_W - 16 - textWidth(sub, UI_FONT_CAPTION), topForBaseline(UI_FONT_CAPTION, 31), sub, UI_FONT_CAPTION, COL_TEXT2, COL_BG);
 
   for (uint8_t i = 0; i < NUM_SERVOS; i++) { resetField(setupValueField[i]); }
   resetField(setupEstimateField);
 
-  char label[8], step[8];
+  fillRound(Rect{ MARGIN, SETUP_CARD_Y, SCREEN_W - 2 * MARGIN, NUM_SERVOS * SETUP_ROW_H }, CARD_RADIUS, COL_CARD, COL_BG);
+
+  char label[12], step[8];
   for (uint8_t row = 0; row < NUM_SERVOS; row++) {
-    Rect labelBox = { SETUP_LABEL_X, (int16_t)(SETUP_ROW_Y0 + row * SETUP_ROW_STEP), 30, SETUP_ROW_H };
-    snprintf(label, sizeof(label), "S%u", (unsigned)(row + 1));
-    drawTextCentered(labelBox, label, 2, COL_TEXT, COL_BG);
+    int16_t rowY = SETUP_CARD_Y + row * SETUP_ROW_H;
+    if (row > 0) fillRect(SETUP_LABEL_X, rowY, SCREEN_W - MARGIN - SETUP_LABEL_X, 1, COL_SEP);
+    snprintf(label, sizeof(label), "Servo %u", (unsigned)(row + 1));
+    drawText(SETUP_LABEL_X, topForCentre(UI_FONT_BODY, rowY + SETUP_ROW_H / 2), label, UI_FONT_BODY, COL_TEXT, COL_CARD);
 
     const SetupPart parts[4] = { P_MINUS_L, P_MINUS_S, P_PLUS_S, P_PLUS_L };
     for (uint8_t k = 0; k < 4; k++) {
       uint32_t amount = (parts[k] == P_MINUS_L || parts[k] == P_PLUS_L) ? STEP_LARGE : STEP_SMALL;
       bool minus = (parts[k] == P_MINUS_L || parts[k] == P_MINUS_S);
       snprintf(step, sizeof(step), "%c%lu", minus ? '-' : '+', (unsigned long)amount);
-      drawButton(setupRect(row, parts[k]), step, 2, COL_BUTTON, COL_TEXT);
+      drawButton(setupRect(row, parts[k]), step, UI_FONT_BODY, COL_FILL, COL_TEXT, COL_CARD);
     }
-    drawBox(setupRect(row, P_VALUE), COL_PANEL, COL_BORDER);
     drawSetupValue(row);
   }
   drawEstimate();
-  drawButton(COPY_BTN, "ALL = S1", 2, COL_BUTTON, COL_TEXT);
-  drawButton(START_BTN, "START", 3, COL_GOOD, COL_ON_BRIGHT);
+  drawButton(COPY_BTN, "Copy S1 to all", UI_FONT_BODY, COL_FILL, COL_BLUE, COL_BG);
+  drawButton(START_BTN, "Start", UI_FONT_BODY, COL_BLUE, COL_TEXT, COL_BG);
   inputBlockedUntil = millis() + 400;
 }
 
@@ -314,68 +388,80 @@ static void adjustTarget(uint8_t row, uint8_t part) {
 // ===========================================================================
 static int16_t runRowY(uint8_t row) { return RUN_ROW_Y0 + row * RUN_ROW_STEP; }
 
-static Rect runPanelRect(uint8_t row)  { return Rect{ 6, runRowY(row), 468, RUN_ROW_H }; }
-static Rect runToggleRect(uint8_t row) { return Rect{ 368, (int16_t)(runRowY(row) + 3), 100, 44 }; }
-static Rect runBarRect(uint8_t row)    { return Rect{ 60, (int16_t)(runRowY(row) + 36), 208, 8 }; }
-static const Rect PAUSE_ALL_BTN  = { 6,   RUN_BOTTOM_Y, 150, RUN_BOTTOM_H };
-static const Rect RESUME_ALL_BTN = { 162, RUN_BOTTOM_Y, 150, RUN_BOTTOM_H };
-static const Rect SETUP_BTN      = { 318, RUN_BOTTOM_Y, 156, RUN_BOTTOM_H };
+const int16_t RUN_BADGE_D  = 36;       // the round servo number
+const int16_t RUN_COUNT_X  = 72;
+const int16_t RUN_STATUS_X = 278;
+
+static Rect runPanelRect(uint8_t row)  { return Rect{ MARGIN, runRowY(row), SCREEN_W - 2 * MARGIN, RUN_ROW_H }; }
+static Rect runBadgeRect(uint8_t row)  { return Rect{ 24, (int16_t)(runRowY(row) + (RUN_ROW_H - RUN_BADGE_D) / 2), RUN_BADGE_D, RUN_BADGE_D }; }
+static Rect runToggleRect(uint8_t row) { return Rect{ 366, (int16_t)(runRowY(row) + 7), 90, 38 }; }
+static Rect runBarRect(uint8_t row)    { return Rect{ RUN_COUNT_X, (int16_t)(runRowY(row) + 42), 196, 6 }; }
+static const Rect PAUSE_ALL_BTN  = { MARGIN, RUN_BOTTOM_Y, 148, RUN_BOTTOM_H };
+static const Rect RESUME_ALL_BTN = { 166,    RUN_BOTTOM_Y, 148, RUN_BOTTOM_H };
+static const Rect SETUP_BTN      = { 320,    RUN_BOTTOM_Y, 148, RUN_BOTTOM_H };
 
 static uint16_t statusColor(ChannelStatus s) {
   switch (s) {
-    case CH_RUNNING: return COL_GOOD;
-    case CH_PAUSED:  return COL_WARN;
-    case CH_DONE:    return COL_ACCENT;
-    case CH_FAULT:   return COL_BAD;
-    default:         return COL_DIM;
+    case CH_RUNNING: return COL_BLUE;
+    case CH_PAUSED:  return COL_ORANGE;
+    case CH_DONE:    return COL_GREEN;
+    case CH_FAULT:   return COL_RED;
+    default:         return COL_TEXT3;
   }
 }
 
 static const char* statusText(ChannelStatus s) {
   switch (s) {
-    case CH_RUNNING: return "RUNNING";
-    case CH_PAUSED:  return "PAUSED";
-    case CH_DONE:    return "DONE";
-    case CH_FAULT:   return "FAULT";
-    default:         return "OFF";
+    case CH_RUNNING: return "Running";
+    case CH_PAUSED:  return "Paused";
+    case CH_DONE:    return "Done";
+    case CH_FAULT:   return "Fault";
+    default:         return "Off";
   }
 }
-
-static const int16_t RUN_COUNT_X = 60;
 
 static void drawRunCount(uint8_t row, uint32_t count) {
   if (runCountChars[row] == 0) return;             // a servo that is OFF shows no counter
   char text[12];
   snprintf(text, sizeof(text), "%lu", (unsigned long)count);
-  drawField(runCountField[row], RUN_COUNT_X, runRowY(row) + 6, 3, COL_TEXT, COL_PANEL, text, runCountChars[row], ALIGN_RIGHT);
+  UiGlyph zero;
+  loadGlyph(UI_FONT_NUM, '0', zero);               // all digits are this wide
+  drawField(runCountField[row], RUN_COUNT_X, topForBaseline(UI_FONT_NUM, runRowY(row) + 32), runCountChars[row] * zero.adv,
+            UI_FONT_NUM, COL_TEXT, COL_CARD, text, ALIGN_LEFT);
 }
 
-static void drawRunBar(uint8_t row, const CycleChannel& ch) {
+// The progress bar is a pill: gray track, blue (green when finished) fill. It is repainted whole when it changes.
+static void drawRunBar(uint8_t row, const CycleChannel& ch, bool force) {
   if (runCountChars[row] == 0) return;
   Rect bar = runBarRect(row);
   int16_t fill = 0;
-  if (ch.target() > 0) fill = (int16_t)((uint64_t)(bar.w - 2) * ch.count() / ch.target());
-  if (fill > bar.w - 2) fill = bar.w - 2;
-  if (fill == shownBarFill[row]) return;
-  if (fill < shownBarFill[row]) {                       // shrank (should not happen): repaint the whole track
-    fillRect(bar.x + 1, bar.y + 1, bar.w - 2, bar.h - 2, COL_BG);
-    shownBarFill[row] = 0;
-  }
-  fillRect(bar.x + 1 + shownBarFill[row], bar.y + 1, fill - shownBarFill[row], bar.h - 2, COL_ACCENT);
+  if (ch.target() > 0) fill = (int16_t)((uint64_t)bar.w * ch.count() / ch.target());
+  if (fill > bar.w) fill = bar.w;
+  if (fill == shownBarFill[row] && !force) return;
   shownBarFill[row] = fill;
+  fillRound(bar, bar.h / 2, COL_FILL, COL_CARD);
+  if (fill > 0) fillRound(Rect{ bar.x, bar.y, fill, bar.h }, bar.h / 2, ch.status() == CH_DONE ? COL_GREEN : COL_BLUE, COL_FILL);
 }
 
 static void drawRunToggle(uint8_t row, ChannelStatus s) {
   Rect r = runToggleRect(row);
-  if (s == CH_RUNNING)     drawButton(r, "PAUSE",  2, COL_WARN, COL_ON_BRIGHT);
-  else if (s == CH_PAUSED) drawButton(r, "RESUME", 2, COL_GOOD, COL_ON_BRIGHT);
-  else                     drawButton(r, "-",      2, COL_PANEL, COL_DIM);
+  if (s == CH_RUNNING)     drawButton(r, "Pause",  UI_FONT_BODY, COL_ORANGE_TINT, COL_ORANGE, COL_CARD);
+  else if (s == CH_PAUSED) drawButton(r, "Resume", UI_FONT_BODY, COL_GREEN_TINT,  COL_GREEN,  COL_CARD);
+  else                     fillRect(r.x, r.y, r.w, r.h, COL_CARD);           // nothing to press
+}
+
+static void drawRunStatus(uint8_t row, ChannelStatus s) {
+  if (s == CH_OFF) return;                      // a servo that is not used shows "Not used" instead
+  uint16_t color = statusColor(s);
+  int16_t cy = runRowY(row) + RUN_ROW_H / 2;
+  fillRound(Rect{ RUN_STATUS_X, (int16_t)(cy - 4), 8, 8 }, 4, color, COL_CARD);                   // status dot
+  drawField(runStatusField[row], RUN_STATUS_X + 14, topForCentre(UI_FONT_BODY, cy), 66, UI_FONT_BODY, color, COL_CARD, statusText(s), ALIGN_LEFT);
 }
 
 static void drawRunStatic() {
   screen = SCREEN_RUN;
   gfx.Fill_Screen(COL_BG);
-  drawHeader("CYCLE TESTER");
+  drawTitle();
   resetField(runOverallField);
 
   for (uint8_t row = 0; row < NUM_SERVOS; row++) {
@@ -383,24 +469,26 @@ static void drawRunStatic() {
     resetField(runStatusField[row]);
     shownCount[row] = 0xFFFFFFFFUL;           // impossible values, so the first refresh paints everything
     shownStatus[row] = 255;
-    shownBarFill[row] = 0;
+    shownBarFill[row] = -1;
 
-    drawBox(runPanelRect(row), COL_PANEL, COL_BORDER);
-    char label[8];
-    snprintf(label, sizeof(label), "S%u", (unsigned)(row + 1));
-    drawText(14, runRowY(row) + 14, label, 3, targets[row] ? COL_TEXT : COL_DIM, COL_PANEL);
+    fillRound(runPanelRect(row), CARD_RADIUS, COL_CARD, COL_BG);
+    Rect badge = runBadgeRect(row);
+    bool on = targets[row] > 0;
+    fillRound(badge, RUN_BADGE_D / 2, on ? COL_BLUE_TINT : COL_FILL, COL_CARD);
+    char label[4];
+    snprintf(label, sizeof(label), "%u", (unsigned)(row + 1));
+    drawTextCentered(badge, label, UI_FONT_BODY, on ? COL_BLUE : COL_TEXT3, on ? COL_BLUE_TINT : COL_FILL);
 
     uint8_t digits = 0;                                 // how many digits this row's target has
     for (uint32_t t = targets[row]; t > 0; t /= 10) digits++;
     runCountChars[row] = digits;
     if (digits > 0) {
-      char of[16];
-      snprintf(of, sizeof(of), "/ %lu", (unsigned long)targets[row]);
-      drawText(RUN_COUNT_X + digits * 18 + 4, runRowY(row) + 13, of, 2, COL_DIM, COL_PANEL);
-
-      Rect bar = runBarRect(row);                       // empty progress track
-      fillRect(bar.x, bar.y, bar.w, bar.h, COL_BORDER);
-      fillRect(bar.x + 1, bar.y + 1, bar.w - 2, bar.h - 2, COL_BG);
+      char of[20];
+      snprintf(of, sizeof(of), "of %lu", (unsigned long)targets[row]);
+      Rect bar = runBarRect(row);                       // "of 1000" sits at the right-hand end of the progress bar
+      drawText(bar.x + bar.w - textWidth(of, UI_FONT_CAPTION), topForBaseline(UI_FONT_CAPTION, runRowY(row) + 32), of, UI_FONT_CAPTION, COL_TEXT2, COL_CARD);
+    } else {
+      drawText(RUN_COUNT_X, topForCentre(UI_FONT_BODY, runRowY(row) + RUN_ROW_H / 2), "Not used", UI_FONT_BODY, COL_TEXT3, COL_CARD);
     }
   }
   shownOverall = OV_UNKNOWN;
@@ -418,7 +506,7 @@ static OverallState overallState() {
 }
 
 // Repaints ONE thing that is out of date (a servo row, the header status or a bottom button), then returns.
-// It is called once per pass of loop(), so a big change such as PAUSE ALL is painted over a handful of
+// It is called once per pass of loop(), so a big change such as Pause All is painted over a handful of
 // passes instead of in one long stall, and the cycle logic and the touch screen keep being serviced in between.
 static void refreshRunStep(uint32_t now) {
   if (confirmPending && (int32_t)(now - confirmUntil) >= 0) confirmPending = false;
@@ -436,42 +524,42 @@ static void refreshRunStep(uint32_t now) {
     }
     if (statusChanged) {
       shownStatus[row] = (uint8_t)st;
-      drawField(runStatusField[row], 278, runRowY(row) + 17, 2, statusColor(st), COL_PANEL, statusText(st), 7, ALIGN_LEFT);
+      drawRunStatus(row, st);
       drawRunToggle(row, st);
     }
-    drawRunBar(row, ch);         // also repainted when a servo finishes, so its bar ends up full
+    drawRunBar(row, ch, statusChanged);         // also repainted when the status changes, so a finished bar turns green
     return;
   }
 
   OverallState ov = overallState();
   if ((uint8_t)ov != shownOverall) {
     shownOverall = (uint8_t)ov;
-    const char* text = (ov == OV_RUNNING) ? "RUNNING" : (ov == OV_PAUSED) ? "PAUSED" : (ov == OV_COMPLETE) ? "COMPLETE" : "FAULT";
-    uint16_t color = (ov == OV_RUNNING) ? COL_GOOD : (ov == OV_PAUSED) ? COL_WARN : (ov == OV_COMPLETE) ? COL_ACCENT : COL_BAD;
-    drawField(runOverallField, SCREEN_W - 10 - 8 * 12, 9, 2, color, COL_BG, text, 8, ALIGN_RIGHT);
+    const char* text = (ov == OV_RUNNING) ? "Running" : (ov == OV_PAUSED) ? "Paused" : (ov == OV_COMPLETE) ? "Complete" : "Fault";
+    uint16_t color = (ov == OV_RUNNING) ? COL_BLUE : (ov == OV_PAUSED) ? COL_ORANGE : (ov == OV_COMPLETE) ? COL_GREEN : COL_RED;
+    drawField(runOverallField, SCREEN_W - 16 - 120, topForBaseline(UI_FONT_BODY, 31), 120, UI_FONT_BODY, color, COL_BG, text, ALIGN_RIGHT);
     return;
   }
 
-  // PAUSE ALL is live while anything is running, RESUME ALL while anything is paused.
+  // Pause All is live while anything is running, Resume All while anything is paused.
   bool canPause  = ctl->countWithStatus(CH_RUNNING) > 0;
   bool canResume = ctl->countWithStatus(CH_PAUSED) > 0;
   if (shownPauseAll != canPause) {
     shownPauseAll = canPause;
-    drawButton(PAUSE_ALL_BTN, "PAUSE ALL", 2, canPause ? COL_WARN : COL_PANEL, canPause ? COL_ON_BRIGHT : COL_DIM);
+    drawButton(PAUSE_ALL_BTN, "Pause All", UI_FONT_BODY, canPause ? COL_ORANGE_TINT : COL_CARD, canPause ? COL_ORANGE : COL_TEXT3, COL_BG);
     return;
   }
   if (shownResumeAll != canResume) {
     shownResumeAll = canResume;
-    drawButton(RESUME_ALL_BTN, "RESUME ALL", 2, canResume ? COL_GOOD : COL_PANEL, canResume ? COL_ON_BRIGHT : COL_DIM);
+    drawButton(RESUME_ALL_BTN, "Resume All", UI_FONT_BODY, canResume ? COL_GREEN_TINT : COL_CARD, canResume ? COL_GREEN : COL_TEXT3, COL_BG);
     return;
   }
 
   SetupBtnState sb = confirmPending ? SB_CONFIRM : (ctl->allFinished() ? SB_NEW_TEST : SB_SETUP);
   if ((uint8_t)sb != shownSetupBtn) {
     shownSetupBtn = (uint8_t)sb;
-    if (sb == SB_CONFIRM)       drawButton(SETUP_BTN, "SURE?",    2, COL_BAD, COL_TEXT);
-    else if (sb == SB_NEW_TEST) drawButton(SETUP_BTN, "NEW TEST", 2, COL_ACCENT, COL_ON_BRIGHT);
-    else                        drawButton(SETUP_BTN, "SETUP",    2, COL_BUTTON, COL_TEXT);
+    if (sb == SB_CONFIRM)       drawButton(SETUP_BTN, "Sure?",    UI_FONT_BODY, COL_RED,  COL_TEXT, COL_BG);
+    else if (sb == SB_NEW_TEST) drawButton(SETUP_BTN, "New Test", UI_FONT_BODY, COL_BLUE, COL_TEXT, COL_BG);
+    else                        drawButton(SETUP_BTN, "Setup",    UI_FONT_BODY, COL_FILL, COL_TEXT, COL_BG);
   }
 }
 
@@ -500,7 +588,7 @@ static Action hitTest(int16_t x, int16_t y) {
 static bool isRepeating(Action a) { return a >= ACT_ADJUST && a < ACT_COPY; }
 
 static void enterSetup() {
-  drawButton(SETUP_BTN, "WAIT...", 2, COL_WARN, COL_ON_BRIGHT);   // instant feedback: the full redraw takes a couple of seconds
+  drawButton(SETUP_BTN, "Wait...", UI_FONT_BODY, COL_FILL, COL_TEXT2, COL_BG);   // instant feedback: the full redraw takes a couple of seconds
   ctl->abort();
   drawSetupScreen();
 }
@@ -525,7 +613,7 @@ static void perform(Action a, uint32_t now) {
       drawEstimate();
       return;
     }
-    drawButton(START_BTN, "STARTING...", 3, COL_WARN, COL_ON_BRIGHT);   // instant feedback: the full redraw takes a couple of seconds
+    drawButton(START_BTN, "Starting...", UI_FONT_BODY, COL_FILL, COL_TEXT2, COL_BG);   // instant feedback: the full redraw takes a couple of seconds
     drawRunStatic();
     ctl->begin(targets, millis());   // start the servos only once the screen is up; the run screen then fills in over the next few passes
 
@@ -626,9 +714,9 @@ void Ui::begin(CycleController& controller) {
   }
   if (!found) {
     gfx.Fill_Screen(COL_BG);
-    drawText(10, 40, "Touch controller not found", 2, COL_BAD, COL_BG);
-    drawText(10, 72, "Check SDA, SCL and the CTP_INT", 2, COL_TEXT, COL_BG);
-    drawText(10, 96, "wire (pin 2), then wait here.", 2, COL_TEXT, COL_BG);
+    drawText(16, 40, "Touch controller not found", UI_FONT_TITLE, COL_RED, COL_BG);
+    drawText(16, 84, "Check SDA, SCL and the CTP_INT", UI_FONT_BODY, COL_TEXT, COL_BG);
+    drawText(16, 108, "wire (pin 2), then wait here.", UI_FONT_BODY, COL_TEXT, COL_BG);
     while (!ctp.begin(TOUCH_THRESHOLD)) delay(500);   // carries on by itself once the wire is fixed
   }
 

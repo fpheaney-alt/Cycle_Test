@@ -1,7 +1,7 @@
 # Cycle Tester
 
 A four-servo cycle-testing robot for an Arduino Mega with a touchscreen. Pick how many cycles each servo should
-do, press START, and watch the counters. Each servo sweeps 180°, returns to its start position, and counts one
+do, press Start, and watch the counters. Each servo sweeps 180°, returns to its start position, and counts one
 cycle. Servos can be paused and resumed individually or all at once.
 
 | Folder | What it is |
@@ -23,7 +23,7 @@ cycle. Servos can be paused and resumed individually or all at once.
 | Adafruit FT6206 Library | Also needs **Adafruit BusIO** (the Library Manager offers to install it). |
 | LCDWIKI_SPI and LCDWIKI_gui | The copies you used for the Snap & Test sketch, from the Hosyond / LCDWIKI download. They must be the versions that know the `ST7796S` display. The public GitHub copy of `LCDWIKI_SPI` does not. |
 
-Compile and upload `CycleTester/CycleTester.ino`. Nothing moves at power-up: the servos get no signal until you press START.
+Compile and upload `CycleTester/CycleTester.ino`. Nothing moves at power-up: the servos get no signal until you press Start.
 
 ## 2. Wiring
 
@@ -71,19 +71,19 @@ These are renders produced by the PC simulation (`tests/host`) using the display
 |---|---|---|---|
 | ![Setup screen](docs/screenshots/setup.png) | ![Running, S2 paused](docs/screenshots/run-one-paused.png) | ![All paused](docs/screenshots/run-all-paused.png) | ![Complete](docs/screenshots/run-complete.png) |
 
-**Setup screen:** each servo has `-1000 -100 [count] +100 +1000` buttons. Hold a button to repeat. `OFF` (0) leaves that
-servo out of the test. `ALL = S1` copies servo 1's count to every servo. The estimated run time is shown above START.
+**Setup screen:** each servo has `-1000 -100 [count] +100 +1000` buttons. Hold a button to repeat. `Off` (0) leaves that
+servo out of the test. `Copy S1 to all` copies servo 1's count to every servo. The estimated run time is shown above Start.
 
-**Run screen:** each row shows the cycle count, the target, a progress bar, the state, and a **PAUSE / RESUME** button for that servo.
-The bottom bar has **PAUSE ALL**, **RESUME ALL** and **SETUP**. SETUP asks "SURE?" (tap again within 3 s) because it ends
-the test and the counts are lost. When everything has finished it becomes **NEW TEST**.
+**Run screen:** each row shows the cycle count, the target, a progress bar, the state, and a **Pause / Resume** button for that servo.
+The bottom bar has **Pause All**, **Resume All** and **Setup**. Setup asks "Sure?" (tap again within 3 s) because it ends
+the test and the counts are lost. When everything has finished it becomes **New Test**.
 
 How it behaves:
 
 * **One cycle** = start position → 180° → back to the start. The counter goes up each time a servo gets back to the start.
 * **Pause** freezes the servo exactly where it is. It stays powered and keeps holding that position (and its current draw and heat), so do not leave a loaded servo paused for hours. **Resume** carries on from that spot.
 * When a servo reaches its target it stops, settles, and is released (no signal, so it is silent and cool). Set `DETACH_WHEN_DONE = false` to make it hold the start position instead.
-* **SETUP** while running sends the servos slowly back to their start position, then releases them.
+* **Setup** while running sends the servos slowly back to their start position, then releases them.
 * Counts are kept in RAM only. A power cut ends the test and loses the counts.
 * Changing screens redraws everything, which takes about 2.5 s on this display. Tapping is ignored briefly afterwards.
 
@@ -129,7 +129,7 @@ You do not have to upload after every try. Type the number in the Serial Monitor
 * The **first** command for a servo makes the arm jump straight to that position at the servo's own speed (it cannot glide from a limp arm). Later commands glide at `SERVO_SPEED_DEG_PER_SEC`.
 * A number that would push a pulse outside 500 – 2500 µs is refused, with a message, and nothing moves.
 * The typed numbers are kept in memory only. They **also apply to the next test you start**, so you can run a few cycles with them, until you reset or power-cycle the Mega. Copy them into `Config.h` and upload to make them permanent.
-* Commands are refused, with a message, while a test is open on the touchscreen (tap SETUP, or NEW TEST, first). Set `SERIAL_COMMANDS = false` in `Config.h` to switch them off.
+* Commands are refused, with a message, while a test is open on the touchscreen (tap Setup, or New Test, first). Set `SERIAL_COMMANDS = false` in `Config.h` to switch them off.
 
 **Procedure, one servo at a time:**
 
@@ -179,9 +179,10 @@ With the defaults one cycle takes 4.5 s (2 × 2 s sweeps + 2 × 0.25 s rests).
 
 Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches the screen, so you can restyle freely.
 
-* The section **"LOOK AND LAYOUT"** at the top holds every colour, size and position.
+* The section **"LOOK AND LAYOUT"** at the top holds every colour, size and position. The look follows Apple's dark mode: black background, rounded grouped cards, soft gray buttons, system blue for the main action, and the Inter typeface (a close relative of San Francisco).
 * Add a button: add an entry to the `Action` enum, draw it (`drawButton`), return it from `hitTest()`, and handle it in `perform()`.
-* Text is drawn by `drawText` / `drawField` using the font in `Font5x7.h` (any size by scale). `drawField` repaints only the characters that changed.
+* Text is drawn by `drawText` / `drawField` using the anti-aliased fonts in `UiFonts.h` (caption, body, title and large-number sizes). `drawField` repaints only text that changed. Rounded corners are anti-aliased by `fillRound`.
+* The fonts are generated: `python3 tools/make_ui_font.py` (needs Pillow and the Inter font files) rewrites `UiFonts.h`. To try another size or typeface, change the `FACES` list at the top of that script. Inter is by Rasmus Andersson, licensed under the SIL Open Font License 1.1 ([rsms.me/inter](https://rsms.me/inter)).
 * Preview your changes without hardware: `cd tests/host && make pictures` writes PNGs of every screen to `tests/host/out/`.
 
 ## 8. Design notes (why it is built this way)
@@ -197,8 +198,8 @@ Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches th
 
 Verified in this repository (no hardware available):
 
-* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 42.1 KB (16 %), RAM ≈ 3.2 KB (39 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
-* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, the 270° configuration, and the typed position commands (parsing, glide speed, refusals, switching off, a test taking over from typed positions). 171 checks pass.
+* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 64.9 KB (25 %), RAM ≈ 3.3 KB (40 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
+* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, Pause All / Resume All, per-servo Off, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, the 270° configuration, and the typed position commands (parsing, glide speed, refusals, switching off, a test taking over from typed positions). 171 checks pass.
   * `make test180` repeats the pulse-range checks for a 180° servo (21 checks). Its 2500 µs end pulse would be clipped to 2476 µs by the Servo library without the fix in `Config.h`, so it also guards that fix.
   * `make testtrim` sets non-zero `SERVO_START_TRIM_DEG` and `SERVO_MEASURED_SWEEP_DEG` values and checks the resulting pulse widths against numbers worked out separately, that the start moves by the trim, and that a servo whose measured sweep was corrected turns a true 180° (31 checks).
   * `make testguards` checks that out-of-range trims or measured sweeps are refused at compile time with a readable message (5 cases).

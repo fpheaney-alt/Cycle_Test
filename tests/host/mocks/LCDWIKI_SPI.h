@@ -32,6 +32,19 @@ class LCDWIKI_SPI {
   }
   void Fill_Screen(uint16_t color) { Fill_Rect(0, 0, W, H, color); }
 
+  // Streaming pixels into an address window, as the real library does: one window set-up, then n pixels.
+  void Set_Addr_Window(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+    winX1_ = x1; winY1_ = y1; winX2_ = x2; winY2_ = y2; curX_ = x1; curY_ = y1;
+  }
+  void Push_Any_Color(uint16_t* block, int16_t n, bool first, uint8_t) {
+    if (first) charge(1, 0);                       // the memory-write command
+    for (int16_t i = 0; i < n; i++) {
+      if (curX_ >= 0 && curY_ >= 0 && curX_ < W && curY_ < H) fb_[curY_ * W + curX_] = block[i];
+      if (++curX_ > winX2_) { curX_ = winX1_; curY_++; }
+    }
+    charge(0, n);
+  }
+
   void Draw_Fast_HLine(int16_t x, int16_t y, int16_t w) { Fill_Rect(x, y, w, 1, drawColor_); }
   void Draw_Fast_VLine(int16_t x, int16_t y, int16_t h) { Fill_Rect(x, y, 1, h, drawColor_); }
   void Draw_Pixel(int16_t x, int16_t y) {
@@ -109,6 +122,7 @@ class LCDWIKI_SPI {
     }
   }
   std::vector<uint16_t> fb_;
+  int16_t winX1_ = 0, winY1_ = 0, winX2_ = 0, winY2_ = 0, curX_ = 0, curY_ = 0;
   uint16_t drawColor_;
   double carry_ = 0;
 };
