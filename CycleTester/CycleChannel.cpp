@@ -10,6 +10,9 @@ static uint_fast8_t easingCode(EasingStyle style) {
   }
 }
 
+// How fast the arm glides when it is moved from the Serial Monitor: the universal speed, as pulse width per second.
+static const float MANUAL_US_PER_SEC = (float)SERVO_SPEED_DEG_PER_SEC * (float)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) / (float)SERVO_FULL_TRAVEL_DEG;
+
 // True once `now` has reached `deadline`, correct even when millis() wraps around.
 static bool reached(uint32_t now, uint32_t deadline) {
   return (int32_t)(now - deadline) >= 0;
@@ -52,6 +55,7 @@ void CycleChannel::release() {
   if (attached_) {
     servo_.stop();
     servo_.detach();
+    digitalWrite(pin_, LOW);        // Servo::detach() can leave the line HIGH if it lands in the middle of a pulse
     attached_ = false;
   }
 }
@@ -61,6 +65,7 @@ void CycleChannel::startMove(int degree) {
 }
 
 void CycleChannel::begin(uint32_t target, uint32_t now, uint32_t startDelayMs) {
+  if (phase_ == PH_MANUAL) { release(); phase_ = PH_IDLE; }   // a typed position drove the pulse directly: attach afresh
   count_  = 0;
   target_ = target;
   paused_ = false;
@@ -77,6 +82,11 @@ void CycleChannel::begin(uint32_t target, uint32_t now, uint32_t startDelayMs) {
 void CycleChannel::abort() {
   paused_  = false;
   enabled_ = false;
+  if (phase_ == PH_MANUAL) {          // nothing to finish: a typed position drove the pulse directly
+    release();
+    phase_ = PH_IDLE;
+    return;
+  }
   if (attached_) {
     phase_ = PH_HOMING;
     startMove(0);                     // from wherever it is, back to the start position
@@ -192,9 +202,47 @@ void CycleChannel::update(uint32_t now) {
       }
       break;
 
+    case PH_MANUAL: {
+      int32_t dt = (int32_t)(now - manualLastMs_);
+      manualLastMs_ = now;
+      if (dt > 250) dt = 250;                       // after a long pause (a screen redraw) do not lurch
+      float target = (float)manualTargetUs_;
+      if (manualUs_ != target) {
+        float step = MANUAL_US_PER_SEC * (float)dt / 1000.0f;
+        if (manualUs_ < target) { manualUs_ += step; if (manualUs_ > target) manualUs_ = target; }
+        else                    { manualUs_ -= step; if (manualUs_ < target) manualUs_ = target; }
+        servo_.writeMicroseconds((int)(manualUs_ + 0.5f));
+      }
+      break;
+    }
+
     default:
       break;
   }
+}
+
+// Bench positioning. The pulse is written directly (Servo::writeMicroseconds), so any end points can be tried
+// without re-attaching the servo. A test that starts afterwards detaches and attaches afresh with these end points.
+bool CycleChannel::manualMove(int startUs, int endUs, bool toEnd, uint32_t now) {
+  if (manualBusy()) return false;
+  startUs_ = startUs;
+  endUs_   = endUs;
+  int target = toEnd ? endUs : startUs;
+  if (phase_ == PH_IDLE) {
+    if (!ensureAttached()) return false;
+    servo_.writeMicroseconds(target);               // attach() has just sent the start pulse; replace it at once
+    phase_ = PH_MANUAL;
+    manualUs_ = (float)target;
+    manualLastMs_ = now;
+  }
+  manualTargetUs_ = target;
+  return true;
+}
+
+void CycleChannel::manualOff() {
+  if (phase_ != PH_MANUAL) return;
+  release();
+  phase_ = PH_IDLE;
 }
 
 // ---------------------------------------------------------------------------

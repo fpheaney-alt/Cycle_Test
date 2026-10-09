@@ -44,6 +44,7 @@ void simAdvanceUs(uint64_t us) {
 #define private public
 #include "CycleChannel.cpp"
 #include "Ui.cpp"
+#include "SerialCommands.cpp"
 #include "CycleTester.ino"
 #undef private
 
@@ -427,6 +428,139 @@ static void scenarioTrim() {
         "S1 and S2 (trim only) have sweeps of the same size (%d and %d us)", SERVO_END_US[0] - SERVO_START_US[0], SERVO_END_US[1] - SERVO_START_US[1]);
 }
 
+// ---- typed position commands (Serial Monitor) ----
+static void typeLine(const char* text, uint32_t waitMs = 60) { Serial.typeText(text); Serial.typeText("\n"); runMs(waitMs); }
+static size_t serialMark() { return Serial.captured.size(); }
+static bool said(size_t mark, const char* text) { return Serial.captured.find(text, mark) != std::string::npos; }
+static CycleChannel& chan(int i) { return controller.ch_[i]; }
+
+// Expected pulse widths for the 270 degree factory settings, worked out separately with exact arithmetic
+// (the same numbers as in scenarioTrim): S1 trim 2.0; S2 trim -1.5; S3 trim 0.5 and measured 177.5; S4 measured 183.
+static void scenarioSerialCommands() {
+  SECTION("Serial Monitor position commands");
+  CHECK(SERVO_FULL_TRAVEL_DEG == 270 && SWEEP_START_OFFSET_DEG == 45, "this scenario is written for the 270 degree settings");
+
+  // leave whatever a previous scenario was doing
+  if (controller.testActive()) { tapRect(SETUP_BTN); tapRect(SETUP_BTN); }
+  runMs(5000);
+  for (int i = 0; i < NUM_SERVOS; i++) { servoOf(i).resetStats(); CHECK(!servoOf(i).attached(), "S%d is off before the first command", i + 1); }
+
+  size_t m = serialMark();
+  typeLine("help");
+  CHECK(said(m, "S1 -5.0") && said(m, "show"), "help lists the commands");
+
+  // 1. the example from the request, upper case and with the trailing F
+  m = serialMark();
+  typeLine("S1 -5.0F");
+  CHECK(servoOf(0).attached() && chan(0).phase_ == CycleChannel::PH_MANUAL, "S1 -5.0F switches S1 on");
+  CHECK(servoOf(0).pulseUs() == 796, "first command jumps straight to the start (%.0f us, wanted 796)", servoOf(0).pulseUs());
+  CHECK(chan(0).startUs() == 796 && chan(0).endUs() == 2130, "S1 trim -5.0 gives %d..%d us (wanted 796..2130)", chan(0).startUs(), chan(0).endUs());
+  CHECK(said(m, "start 796 us, end 2130 us") && said(m, "START"), "and says so");
+  CHECK(!servoOf(1).attached() && !servoOf(2).attached() && !servoOf(3).attached(), "the other servos stay off");
+
+  // 2. going to the end glides at the universal speed (90 deg/s = 667 us/s on this servo)
+  typeLine("s1 end", 1000);
+  double mid = servoOf(0).pulseUs();
+  CHECK(mid > 796 + 600 && mid < 796 + 740, "one second into the glide the pulse is %.0f us (about 667 us further on)", mid);
+  runMs(2000);
+  CHECK(servoOf(0).pulseUs() == 2130, "S1 arrives at the end (%.0f us)", servoOf(0).pulseUs());
+  typeLine("S1 start", 3000);
+  CHECK(servoOf(0).pulseUs() == 796, "and back at the start (%.0f us)", servoOf(0).pulseUs());
+  CHECK(servoOf(0).minUs() >= 796 && servoOf(0).maxUs() <= 2130, "never outside its two ends (%d..%d)", servoOf(0).minUs(), servoOf(0).maxUs());
+
+  // 3. typing the numbers gives exactly what the same numbers give when they are put in Config.h
+  typeLine("S1 2");
+  typeLine("S2 -1.5f");
+  typeLine("S3 0.5");
+  typeLine("S3 sweep 177.5");
+  typeLine("S4 sweep 183");
+  static const int expStart[4] = { 848, 822, 837, 833 };
+  static const int expEnd[4]   = { 2181, 2156, 2189, 2145 };
+  for (int i = 0; i < NUM_SERVOS; i++)
+    CHECK(chan(i).startUs() == expStart[i] && chan(i).endUs() == expEnd[i], "S%d typed values give %d..%d us (wanted %d..%d)", i + 1, chan(i).startUs(), chan(i).endUs(), expStart[i], expEnd[i]);
+
+  m = serialMark();
+  typeLine("show");
+  CHECK(said(m, "{ 2.000f, -1.500f, 0.500f, 0.000f };") && said(m, "{ 180.000f, 180.000f, 177.500f, 183.000f };"),
+        "show prints the numbers in the form Config.h uses");
+  CHECK(said(m, "SERVO_START_TRIM_DEG[NUM_SERVOS]") && said(m, "SERVO_MEASURED_SWEEP_DEG[NUM_SERVOS]"), "under the right names");
+
+  // 4. things that must be refused, changing nothing
+  const char* bad[] = { "S1 60", "S4 -50", "S1 abc", "S9 1", "S1 1e9", "S3 sweep 80", "S2 sweep 120", "S1 sweep", "S1 -5 foo", "S1", "banana", "S1 start 3", "S1 nan" };
+  for (const char* b : bad) {
+    m = serialMark();
+    typeLine(b);
+    CHECK(said(m, "refused") || said(m, "Did not understand") || said(m, "usage"), "\"%s\" is refused with a message", b);
+  }
+  for (int i = 0; i < NUM_SERVOS; i++)
+    CHECK(chan(i).startUs() == expStart[i] && chan(i).endUs() == expEnd[i], "S%d is unchanged by all of that (%d..%d)", i + 1, chan(i).startUs(), chan(i).endUs());
+  m = serialMark();
+  typeLine("S1 60");
+  CHECK(said(m, "start would be") && said(m, "500..2500"), "an out-of-range trim says what the pulses would have been");
+
+  // 5. odd but harmless input: extra spaces, Windows line endings, a very long line, then normal use again
+  Serial.typeText("  S1    2.0   end \r\n");
+  runMs(60);
+  CHECK(chan(0).startUs() == 848 && chan(0).endUs() == 2181, "extra spaces and CR LF are fine");
+  m = serialMark();
+  typeLine("S1 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0");
+  CHECK(said(m, "too long"), "a very long line is refused");
+  typeLine("S1 start");
+  CHECK(chan(0).startUs() == 848, "and the next line still works");
+
+  // 6. off, and switching on again
+  typeLine("S2 off");
+  CHECK(!servoOf(1).attached() && chan(1).phase_ == CycleChannel::PH_IDLE, "S2 off stops the signal");
+  int attachesBefore = servoOf(1).attachCount();
+  typeLine("S2 end");
+  CHECK(servoOf(1).attached() && servoOf(1).attachCount() == attachesBefore + 1 && servoOf(1).pulseUs() == 2156, "S2 end switches it on again, straight at the end (%.0f us)", servoOf(1).pulseUs());
+  CHECK(ServoEasing::leakedAttaches() == 0, "no servo is ever attached twice (%d)", ServoEasing::leakedAttaches());
+
+  // 7. ALL
+  typeLine("ALL 0", 200);
+  for (int i = 0; i < NUM_SERVOS; i++)
+    CHECK(servoOf(i).attached() && chan(i).startUs() == 833 && chan(i).endUs() == (i == 3 ? 2145 : (i == 2 ? 2185 : 2167)),
+          "ALL 0 on S%d gives %d..%d us", i + 1, chan(i).startUs(), chan(i).endUs());
+  typeLine("ALL reset", 200);
+  for (int i = 0; i < NUM_SERVOS; i++)
+    CHECK(chan(i).startUs() == SERVO_START_US[i] && chan(i).endUs() == SERVO_END_US[i] && trimDeg[i] == SERVO_START_TRIM_DEG[i] && sweepDeg[i] == SERVO_MEASURED_SWEEP_DEG[i],
+          "ALL reset puts S%d back to the Config.h numbers", i + 1);
+  typeLine("ALL off");
+  for (int i = 0; i < NUM_SERVOS; i++) CHECK(!servoOf(i).attached(), "ALL off releases S%d", i + 1);
+
+  // 8. a test started afterwards uses the typed numbers
+  typeLine("S1 5.0");                              // switched on with one set of end points...
+  typeLine("S1 2.0");                              // ...then changed: the test must still use the latest ones
+  typeLine("S2 end");
+  for (int i = 0; i < NUM_SERVOS; i++) servoOf(i).resetStats();
+  ServoEasing::leakedAttaches() = 0;
+  tapRect(START_BTN);
+  runMs(20000);
+  CHECK(servoOf(0).minUs() == 848 && servoOf(0).maxUs() == 2181, "the test moved S1 over 848..2181 us (%d..%d)", servoOf(0).minUs(), servoOf(0).maxUs());
+  CHECK(servoOf(1).minUs() == 833 && servoOf(1).maxUs() == 2167, "and S2 over 833..2167 us although it was left at its end (%d..%d)", servoOf(1).minUs(), servoOf(1).maxUs());
+  for (int i = 0; i < NUM_SERVOS; i++)
+    if (targets[i] > 0) CHECK(controller.channel(i).count() >= 3, "S%d is cycling (count %lu)", i + 1, (unsigned long)controller.channel(i).count());
+  CHECK(ServoEasing::leakedAttaches() == 0, "no leaked attaches when a test takes over from typed positions (%d)", ServoEasing::leakedAttaches());
+
+  // 9. while a test is open the commands are refused; right after leaving it the servos are still homing
+  m = serialMark();
+  typeLine("S1 -5");
+  CHECK(said(m, "test is open") && chan(0).startUs() == 848, "commands are refused while a test is open");
+  CHECK(!chan(0).manualMove(900, 2000, false, millis()), "a servo that is part of a running test cannot be moved by hand");
+  while (!(chan(0).phase_ == CycleChannel::PH_TO_END)) runMs(5);     // leave in the middle of a sweep, so S1 has to home
+  runMs(700);
+  controller.abort();                                                // (not through the screen, which would take seconds to redraw)
+  m = serialMark();
+  typeLine("S1 start", 20);
+  CHECK(said(m, "busy") && servoOf(0).attached(), "straight after leaving a test the servo is still homing, so the command waits");
+  runMs(5000);
+  m = serialMark();
+  typeLine("S1 start");
+  CHECK(!said(m, "busy") && servoOf(0).attached() && chan(0).phase_ == CycleChannel::PH_MANUAL, "a few seconds later it works again");
+  typeLine("ALL off");
+  CHECK(ServoEasing::leakedAttaches() == 0, "still no leaked attaches (%d)", ServoEasing::leakedAttaches());
+}
+
 static void reportStalls() {
   SECTION("Responsiveness");
   printf("  longest single pass of loop(): %.0f ms on the run screen, %.0f ms on the setup screen\n", g_maxStallUs / 1000.0, g_maxStallUsSetup / 1000.0);
@@ -465,6 +599,7 @@ int main(int argc, char** argv) {
     scenarioRunAndPause();
     scenarioFinish();
     scenarioAbortFlow();
+    scenarioSerialCommands();
     reportStalls();
   }
 

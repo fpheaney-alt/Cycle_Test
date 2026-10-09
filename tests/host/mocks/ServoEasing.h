@@ -95,7 +95,11 @@ class ServoEasing {
   void writeDegrees(double deg) {
     curDeg_ = deg;
     double us = us0_ + (us180_ - us0_) * deg / 180.0;
-    int rounded = (int)lround(us);
+    writeMicroseconds((int)lround(us));
+  }
+ public:
+  // Servo::writeMicroseconds(): the pulse the Servo library holds and sends every 20 ms (clamped to its limits)
+  void writeMicroseconds(int rounded) {
     int lo = 544 - min8_ * 4, hi = 2400 - max8_ * 4;      // the Servo library's clamp
     if (rounded < lo) rounded = lo;
     else if (rounded > hi) rounded = hi;
@@ -109,6 +113,7 @@ class ServoEasing {
     if (rounded < minUs_) minUs_ = rounded;
     if (rounded > maxUs_) maxUs_ = rounded;
   }
+ private:
   void update() {
     uint32_t elapsed = millis() - startMs_;
     if (elapsed >= durMs_) { writeDegrees(endDeg_); moves_ = false; return; }

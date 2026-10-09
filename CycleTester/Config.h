@@ -123,6 +123,8 @@ const int SWEEP_DEG = 180;
 //                        sketch was asked for a 180 degree sweep. Leave at 180.0 until you have measured it.
 //                        If the arm turned 177.5, type 177.5 and the sketch widens its sweep to make up for it.
 //
+// Try a number before you put it here: type it in the Serial Monitor, e.g.  S1 -5.0  (see README, section 5).
+//
 // Smallest step: one pulse width step is about 0.135 degrees on a 270 degree servo (0.09 on a 180 degree
 // one). The servo's own dead band (2-3 us) limits how finely the arm can really be placed, to roughly 0.3 degrees.
 constexpr float SERVO_START_TRIM_DEG[NUM_SERVOS]      = {   0.0f,   0.0f,   0.0f,   0.0f };
@@ -132,15 +134,21 @@ constexpr float SERVO_MEASURED_SWEEP_DEG[NUM_SERVOS]  = { 180.0f, 180.0f, 180.0f
 constexpr int roundToInt(float v) { return (int)(v < 0.0f ? v - 0.5f : v + 0.5f); }
 // microseconds for a position given in degrees from the MIN end of the full travel
 constexpr int pulseAtDeg(float deg) { return SERVO_PULSE_MIN_US + roundToInt((float)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * deg / (float)SERVO_FULL_TRAVEL_DEG); }
-constexpr float startDegFor(int i) { return (float)SWEEP_START_OFFSET_DEG + SERVO_START_TRIM_DEG[i]; }
-constexpr float endDegFor(int i)   { return startDegFor(i) + (float)SWEEP_DEG * (float)SWEEP_DEG / SERVO_MEASURED_SWEEP_DEG[i]; }
+// The pulse at the start / end of a sweep for a given trim and measured sweep. The Serial Monitor commands use
+// these same two functions, so a position you have tried by typing it is exactly the one you get when you
+// put the same numbers in the two arrays above.
+constexpr int startUsFor(float trimDeg) { return pulseAtDeg((float)SWEEP_START_OFFSET_DEG + trimDeg); }
+constexpr int endUsFor(float trimDeg, float measuredSweepDeg) {
+  return pulseAtDeg((float)SWEEP_START_OFFSET_DEG + trimDeg + (float)SWEEP_DEG * (float)SWEEP_DEG / measuredSweepDeg);
+}
 
 // The ends of each servo's sweep in microseconds. "Start" is where a cycle begins and ends.
 // Advanced: you may replace any entry by a plain number (for example one measured with tools/ServoRangeTest);
 // the trim and measured-sweep numbers above are then ignored for that servo. Swapping a servo's START and
 // END makes it sweep the other way.
-constexpr int SERVO_START_US[NUM_SERVOS] = { pulseAtDeg(startDegFor(0)), pulseAtDeg(startDegFor(1)), pulseAtDeg(startDegFor(2)), pulseAtDeg(startDegFor(3)) };
-constexpr int SERVO_END_US[NUM_SERVOS]   = { pulseAtDeg(endDegFor(0)),   pulseAtDeg(endDegFor(1)),   pulseAtDeg(endDegFor(2)),   pulseAtDeg(endDegFor(3))   };
+constexpr int SERVO_START_US[NUM_SERVOS] = { startUsFor(SERVO_START_TRIM_DEG[0]), startUsFor(SERVO_START_TRIM_DEG[1]), startUsFor(SERVO_START_TRIM_DEG[2]), startUsFor(SERVO_START_TRIM_DEG[3]) };
+constexpr int SERVO_END_US[NUM_SERVOS]   = { endUsFor(SERVO_START_TRIM_DEG[0], SERVO_MEASURED_SWEEP_DEG[0]), endUsFor(SERVO_START_TRIM_DEG[1], SERVO_MEASURED_SWEEP_DEG[1]),
+                                             endUsFor(SERVO_START_TRIM_DEG[2], SERVO_MEASURED_SWEEP_DEG[2]), endUsFor(SERVO_START_TRIM_DEG[3], SERVO_MEASURED_SWEEP_DEG[3]) };
 
 // Compile-time sanity checks. If one of these fires, the message says what to fix.
 constexpr bool pulseInLimits(int us)   { return us >= SERVO_PULSE_MIN_US && us <= SERVO_PULSE_MAX_US; }
@@ -185,5 +193,7 @@ const uint16_t CONFIRM_WINDOW_MS   = 3000;  // time to tap the SETUP button a se
 // DIAGNOSTICS
 // ===========================================================================
 const bool          SERIAL_LOG  = true;     // print events (start, pause, done...) to the Serial Monitor
+const bool          SERIAL_COMMANDS = true; // accept position commands typed in the Serial Monitor (type help). Only
+                                            // work between tests. Set the Monitor to 115200 baud and line ending "Newline".
 const unsigned long SERIAL_BAUD = 115200;
 const bool          TOUCH_DEBUG = false;    // true: print every recognised touch (raw and screen position) to Serial

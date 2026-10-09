@@ -89,7 +89,7 @@ How it behaves:
 
 ## 5. Fine tuning the position and the speed (in `Config.h`)
 
-Everything below is a number in `CycleTester/Config.h`. Edit it, press Upload, and the change applies the next time a test starts.
+Everything below is a number in `CycleTester/Config.h`. Edit it, press Upload, and the change applies the next time a test starts. To try a number first without uploading, see "Try a position" below.
 
 ### Where each servo starts and how far it sweeps
 
@@ -109,14 +109,36 @@ constexpr float SERVO_MEASURED_SWEEP_DEG[NUM_SERVOS] = { 180.0f, 180.0f, 177.5f,
 * **How small a step?** One pulse-width step (1 µs) is about **0.135°** on a 270° servo (0.09° on a 180° one), so the numbers are good to roughly 0.1°. Values are rounded to the nearest microsecond. The servo's own dead band (2 – 3 µs) means the arm cannot really be placed more finely than about 0.3°.
 * **Limits.** The sketch refuses to compile (and tells you why) if a trim or measured sweep would push a pulse outside `SERVO_PULSE_MIN_US` … `SERVO_PULSE_MAX_US` (500 – 2500 µs), because the arm would then run into its end stop.
 
+### Try a position before putting it in `Config.h` (Serial Monitor)
+
+You do not have to upload after every try. Type the number in the Serial Monitor and the arm goes there. Open it with Tools → Serial Monitor in the Arduino IDE, set **115200 baud** and the line ending to **Newline**, and type a command followed by Enter. It works whenever no test is open on the touchscreen (on the setup screen).
+
+| Type | What happens |
+|---|---|
+| `S1 -5.0` | S1 goes to its **start** position with a start trim of -5.0°. This is exactly the number that goes in `SERVO_START_TRIM_DEG`. A trailing `f`, as in `-5.0f`, is fine, and so is lower case. |
+| `S1 -5.0 end` | The same trim, but go to the **end** of the sweep. |
+| `S1 start` / `S1 end` | Go to the start / end with the numbers typed so far. |
+| `S1 sweep 177.5` | Say that the arm turned 177.5° when 180° was asked for, and go to the end of the corrected sweep. This is the number for `SERVO_MEASURED_SWEEP_DEG`. |
+| `S1 off` | Stop sending a signal; the servo goes limp. |
+| `S1 reset` | Back to the numbers in `Config.h`. |
+| `show` | Print the numbers typed so far as two lines you can copy straight into `Config.h`. |
+| `help` | The list of commands. |
+
+`S1` can be `S1`, `S2`, `S3`, `S4` or `ALL` (for example `ALL start`, `ALL 0`, `ALL off`).
+
+* The **first** command for a servo makes the arm jump straight to that position at the servo's own speed (it cannot glide from a limp arm). Later commands glide at `SERVO_SPEED_DEG_PER_SEC`.
+* A number that would push a pulse outside 500 – 2500 µs is refused, with a message, and nothing moves.
+* The typed numbers are kept in memory only. They **also apply to the next test you start**, so you can run a few cycles with them, until you reset or power-cycle the Mega. Copy them into `Config.h` and upload to make them permanent.
+* Commands are refused, with a message, while a test is open on the touchscreen (tap SETUP, or NEW TEST, first). Set `SERIAL_COMMANDS = false` in `Config.h` to switch them off.
+
 **Procedure, one servo at a time:**
 
-1. Make the arm rest long enough at each end to measure it: temporarily set `DWELL_AT_END_MS` and `DWELL_AT_START_MS` to `5000`, and on the setup screen set every servo except the one you are tuning to OFF.
-2. Upload and press START. When the arm sits at the **start** position, measure its angle against where you want it (fixture, square or protractor). If it is 3.5° too far towards the MAX end, enter `-3.5` as that servo's `SERVO_START_TRIM_DEG`.
-3. When it sits at the far end, measure the angle it has turned from the start. If it turned 177.5° instead of 180°, enter `177.5` as its `SERVO_MEASURED_SWEEP_DEG`.
-4. Upload again, check both ends, and repeat until you are happy. Set the two dwell times back afterwards.
+1. Setup screen showing, no test open. Type `S1 0` and look at where the arm sits. This is the start position with no trim.
+2. Type `S1 -3.5`, `S1 1.25`, … until the start is exactly where you want it (measure with the fixture, a square or a protractor). That number is this servo's `SERVO_START_TRIM_DEG`.
+3. Type `S1 sweep 180` and measure how far the arm turns from the start to the end. Call that angle A (say 177.5°). Type `S1 sweep 177.5`: the sweep is now corrected and the arm should turn exactly 180°. Check it. A is this servo's `SERVO_MEASURED_SWEEP_DEG`.
+4. Repeat for the other servos, then type `show` and copy its two lines over the two lines in `Config.h`. Upload once.
 
-**Prefer to work in microseconds?** Use `tools/ServoRangeTest` to jog a servo to exactly where you want its start and end, with no re-upload between tries, then type the two numbers it reports straight into that servo's entry of `SERVO_START_US[]` and `SERVO_END_US[]` (just below the two settings above in `Config.h`). Those entries then replace the trim for that servo. Swapping a servo's start and end numbers makes it sweep the other way.
+**Prefer to work in microseconds?** Use `tools/ServoRangeTest` to jog a servo to exactly where you want its start and end, then type the two numbers it reports straight into that servo's entry of `SERVO_START_US[]` and `SERVO_END_US[]` (just below the two settings above in `Config.h`). Those entries then replace the trim for that servo. Swapping a servo's start and end numbers makes it sweep the other way. (If you type a degree command for that servo afterwards, the typed numbers take over until you use `S1 reset`.)
 
 ### How fast
 
@@ -149,7 +171,7 @@ For example a 3 s cycle with 250 ms rests: `360 / (3 - 0.5) = 144`. The setup sc
 | `SERVO_START_US[]`, `SERVO_END_US[]` | derived | The resulting pulse widths. Advanced: replace an entry with a plain number to set it in µs. |
 | `DEFAULT_TARGET_CYCLES`, `MAX_TARGET_CYCLES`, `STEP_SMALL/LARGE` | 1000, 999900, 100/1000 | Setup screen. |
 | `TOUCH_POLL_MS`, `TOUCH_THRESHOLD`, `REPEAT_*` | 25, 40, … | Touch behaviour. |
-| `SERIAL_LOG`, `TOUCH_DEBUG` | true, false | Serial Monitor output at 115200 baud. |
+| `SERIAL_LOG`, `SERIAL_COMMANDS`, `TOUCH_DEBUG` | true, true, false | Serial Monitor output at 115200 baud, typed position commands (section 5), and touch debugging. |
 
 With the defaults one cycle takes 4.5 s (2 × 2 s sweeps + 2 × 0.25 s rests).
 
@@ -175,8 +197,8 @@ Everything visual is in `CycleTester/Ui.cpp`; the cycling logic never touches th
 
 Verified in this repository (no hardware available):
 
-* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 35.4 KB (13 %), RAM ≈ 3.0 KB (36 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
-* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, and the 270° configuration. 101 checks pass.
+* Compiles for the Arduino Mega 2560 with the AVR compiler (`-Wall -Wextra`, no warnings from this code). Flash ≈ 41.8 KB (16 %), RAM ≈ 3.2 KB (39 %). The AVR compiler also produces exactly the pulse widths the simulation expects for a set of trim / measured-sweep values.
+* `tests/host` runs the real sketch code against a simulated clock, servo library, display and touch panel. It checks cycle timing (4.5 s), counts reaching exactly the target, pause/resume with no position jump, PAUSE ALL / RESUME ALL, per-servo OFF, start stagger, abort and homing, no double-attach, `millis()` rollover during a run, hold-to-repeat, phantom touches, the 270° configuration, and the typed position commands (parsing, glide speed, refusals, switching off, a test taking over from typed positions). 169 checks pass.
   * `make test180` repeats the pulse-range checks for a 180° servo (21 checks). Its 2500 µs end pulse would be clipped to 2476 µs by the Servo library without the fix in `Config.h`, so it also guards that fix.
   * `make testtrim` sets non-zero `SERVO_START_TRIM_DEG` and `SERVO_MEASURED_SWEEP_DEG` values and checks the resulting pulse widths against numbers worked out separately, that the start moves by the trim, and that a servo whose measured sweep was corrected turns a true 180° (31 checks).
   * `make testguards` checks that out-of-range trims or measured sweeps are refused at compile time with a readable message (5 cases).

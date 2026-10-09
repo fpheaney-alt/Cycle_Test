@@ -33,6 +33,17 @@ class CycleChannel {
   ChannelStatus status() const;
   bool          waitingToStart() const { return enabled_ && !paused_ && phase_ == PH_WAIT; }
 
+  // ---- bench positioning (Serial Monitor commands, only between tests) ----
+  // Hold the arm at the start or the end of a sweep with these end points. The first call switches the servo on
+  // and the arm jumps there; later calls glide at the universal speed. The end points are kept, so a test started
+  // afterwards uses them too (until power-off).
+  bool manualMove(int startUs, int endUs, bool toEnd, uint32_t now);
+  void manualOff();                                                 // stop sending a signal (the servo goes limp)
+  bool manualBusy() const { return phase_ != PH_IDLE && phase_ != PH_MANUAL; }   // a test or a homing move is in progress
+  bool manualOn() const   { return phase_ == PH_MANUAL; }
+  int  startUs() const { return startUs_; }                       // the end points in use (Config.h, or typed since power-up)
+  int  endUs()   const { return endUs_; }
+
  private:
   enum Phase : uint8_t {
     PH_IDLE,          // not part of a test
@@ -43,7 +54,8 @@ class CycleChannel {
     PH_HOLD_START,    // resting at the start position
     PH_FINISHING,     // last cycle done, letting the servo settle before it is released
     PH_DONE,          // finished
-    PH_HOMING         // test was aborted: gently returning to the start position
+    PH_HOMING,        // test was aborted: gently returning to the start position
+    PH_MANUAL         // holding a position typed in the Serial Monitor
   };
 
   bool isMovePhase() const    { return phase_ == PH_TO_END || phase_ == PH_TO_START; }
@@ -69,6 +81,9 @@ class CycleChannel {
   uint32_t deadline_ = 0;         // when a timed phase (wait / hold / finishing) ends
   uint32_t remainingMs_ = 0;      // time left in a timed phase, saved while paused
   int      resumeDegree_ = 0;     // where an interrupted sweep was heading
+  float    manualUs_ = 0;         // bench positioning: pulse width being sent now
+  int      manualTargetUs_ = 0;   // ... and the one it is gliding towards
+  uint32_t manualLastMs_ = 0;
 };
 
 class CycleController {
@@ -85,6 +100,10 @@ class CycleController {
 
   const CycleChannel& channel(uint8_t index) const { return ch_[index]; }
   bool testActive() const { return active_; }
+  bool manualMove(uint8_t index, int startUs, int endUs, bool toEnd, uint32_t now) {   // see CycleChannel::manualMove
+    return index < NUM_SERVOS && !active_ && ch_[index].manualMove(startUs, endUs, toEnd, now);
+  }
+  void manualOff(uint8_t index) { if (index < NUM_SERVOS) ch_[index].manualOff(); }
   uint8_t countWithStatus(ChannelStatus s) const;
   bool allFinished() const;                                       // every servo is DONE or OFF
 

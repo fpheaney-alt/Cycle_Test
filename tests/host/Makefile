@@ -16,7 +16,7 @@ CXX    ?= g++
 WARN     = -std=gnu++11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 CXXFLAGS = $(WARN) -Imocks -I$(SKETCH)
 
-SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h \
+SRC = sim.cpp $(SKETCH)/CycleChannel.cpp $(SKETCH)/CycleChannel.h $(SKETCH)/Ui.cpp $(SKETCH)/Ui.h $(SKETCH)/SerialCommands.cpp $(SKETCH)/SerialCommands.h \
       $(SKETCH)/Config.h $(SKETCH)/CycleTester.ino $(SKETCH)/Font5x7.h $(wildcard mocks/*.h mocks/*.hpp)
 
 .PHONY: all run pictures test180 testtrim testguards clean

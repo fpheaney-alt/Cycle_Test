@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <string>
 
 typedef bool boolean;
 typedef uint8_t byte;
@@ -43,15 +44,26 @@ struct SerialMock {
     if (lineStart && enabled) { printf("  [%9.3f s] ", (double)(g_simUs % 100000000000ULL) / 1e6); }
     lineStart = false;
   }
+  // everything printed is also kept, so tests can look at what a Serial Monitor would show
+  std::string captured;
+  // text "typed" into the Serial Monitor by a test
+  std::string input;
+  size_t inputPos = 0;
+  void typeText(const char* text) { input += text; }
+  int available() { return (int)(input.size() - inputPos); }
+  int read() { return inputPos < input.size() ? (unsigned char)input[inputPos++] : -1; }
+
+  void out(const char* s)    { captured += s; stamp(); if (enabled) fputs(s, stdout); }
   void begin(unsigned long) {}
-  void print(const char* s)  { stamp(); if (enabled) fputs(s, stdout); }
+  void print(const char* s)  { out(s); }
   void print(const __FlashStringHelper* s) { print(reinterpret_cast<const char*>(s)); }
-  void print(char c)         { stamp(); if (enabled) putchar(c); }
-  void print(int v)          { stamp(); if (enabled) printf("%d", v); }
-  void print(unsigned int v) { stamp(); if (enabled) printf("%u", v); }
-  void print(long v)         { stamp(); if (enabled) printf("%ld", v); }
-  void print(unsigned long v){ stamp(); if (enabled) printf("%lu", v); }
-  template <typename T> void println(T v) { print(v); if (enabled) putchar('\n'); lineStart = true; }
-  void println()             { if (enabled) putchar('\n'); lineStart = true; }
+  void print(char c)         { char b[2] = { c, 0 }; out(b); }
+  void print(int v)          { char b[24]; snprintf(b, sizeof(b), "%d", v); out(b); }
+  void print(unsigned int v) { char b[24]; snprintf(b, sizeof(b), "%u", v); out(b); }
+  void print(long v)         { char b[24]; snprintf(b, sizeof(b), "%ld", v); out(b); }
+  void print(unsigned long v){ char b[24]; snprintf(b, sizeof(b), "%lu", v); out(b); }
+  void print(double v, int digits = 2) { char b[40]; snprintf(b, sizeof(b), "%.*f", digits, v); out(b); }
+  template <typename T> void println(T v) { print(v); out("\n"); lineStart = true; }
+  void println()             { out("\n"); lineStart = true; }
 };
 extern SerialMock Serial;
