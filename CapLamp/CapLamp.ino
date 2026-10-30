@@ -1,8 +1,8 @@
 // Capacitive-touch lamp: Seeed XIAO ESP32S3 + WS2812 16-LED ring + copper tape button
 //
 // WIRING
-//   Copper tape wire  -> D1  (GPIO2)   touch-capable pin, no resistor needed
-//   WS2812 DIN        -> D10 (GPIO9)   through a ~330 ohm resistor
+//   Copper tape wire  -> D10 (GPIO9)   touch-capable pin, no resistor needed
+//   WS2812 DIN        -> D1  (GPIO2)   through a ~330 ohm resistor
 //   WS2812 5V         -> 5V pin
 //   WS2812 GND        -> GND           (share ground with the XIAO)
 //
@@ -20,8 +20,8 @@
 #include <Adafruit_NeoPixel.h>
 
 // ----------------------- PINS --------------------
-const int TOUCH_PIN = 2;   // GPIO2 = D1
-const int LED_PIN   = 9;   // GPIO9 = D10
+const int TOUCH_PIN = 9;   // GPIO9 = D10
+const int LED_PIN   = 2;   // GPIO2 = D1
 const int NUM_LEDS  = 16;
 
 // ----------------------- COLOUR (edit here) --------------------
