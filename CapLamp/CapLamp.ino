@@ -8,7 +8,7 @@
 //
 // CONTROLS
 //   Tap                       -> lamp on / off
-//   Double tap                -> next effect (solid -> candle -> chase)
+//   Double tap                -> next effect (solid -> candle -> wave)
 //   Hold (HOLD_MS)            -> brightness ramps while held; direction alternates each hold
 //
 // SERIAL MONITOR (115200 baud) - readings stream every PRINT_MS
@@ -16,7 +16,7 @@
 //   +  /  -    nudge sensitivity by 100
 //   r          re-calibrate baseline (don't touch the tape)
 //   c R G B    set lamp colour live, e.g. "c 255 140 40"
-//   e          switch effect;  "e solid", "e candle" or "e chase" picks one
+//   e          switch effect;  "e solid", "e candle" or "e wave" picks one
 //   p          pause / resume the readings stream
 
 #include <Adafruit_NeoPixel.h>
@@ -56,8 +56,8 @@ const unsigned long PRINT_MS = 100;
 // ----------------------- EFFECTS --------------------
 // All effects use the colour above (and "c R G B"). For a candle try something orange,
 // e.g. "c 255 90 10".
-enum Effect { FX_SOLID, FX_CANDLE, FX_CHASE, FX_COUNT };
-const char* FX_NAMES[FX_COUNT] = { "solid", "candle", "chase" };
+enum Effect { FX_SOLID, FX_CANDLE, FX_WAVE, FX_COUNT };
+const char* FX_NAMES[FX_COUNT] = { "solid", "candle", "wave" };
 Effect effect = FX_CANDLE;                      // effect at power-up
 
 const unsigned long FRAME_MS = 25;              // animation frame time (40 fps)
@@ -72,13 +72,12 @@ const float CANDLE_SMOOTH      = 0.08;          // 0..1, how fast the level chas
 const float CANDLE_PIXEL_SPREAD = 0.10;         // how much each LED varies from the others
 const float CANDLE_PIXEL_FOLLOW = 0.15;         // 0..1, how fast each LED follows (lower = slower shimmer)
 
-// Chase - every LED stays lit; the "chase" is a bright spot moving around a dimmer glow
-const unsigned long CHASE_MS    = 4000;         // ms for one full rotation (higher = slower)
-const bool          CHASE_CLOCKWISE = true;     // false = other direction
-const float         CHASE_MIN   = 0.25;         // dimmest LED, 0..1 (keep above 0 so none go dark)
-const float         CHASE_MAX   = 1.0;          // brightest LED (the head), 0..1
-const float         CHASE_TAIL  = 10.0;         // LEDs over which it fades from MAX to MIN
-                                                //   (16 = whole ring is a gradient, small = tight comet)
+// Wave - brightness ripples smoothly around the ring; every LED stays lit
+const unsigned long WAVE_MS    = 4000;          // ms for the wave to move one wavelength (higher = slower)
+const int           WAVE_COUNT = 2;             // bright crests around the ring (1 = one broad swell)
+const bool          WAVE_CLOCKWISE = true;      // false = other direction
+const float         WAVE_MIN   = 0.20;          // dimmest LED, 0..1 (keep above 0 so none go dark)
+const float         WAVE_MAX   = 1.0;           // brightest LED, 0..1
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -149,14 +148,13 @@ void fxCandle(unsigned long now) {
   }
 }
 
-void fxChase(unsigned long now) {
-  float head = (now % CHASE_MS) * (float)NUM_LEDS / CHASE_MS;
-  if (!CHASE_CLOCKWISE) head = NUM_LEDS - head;
+void fxWave(unsigned long now) {
+  float phase = (now % WAVE_MS) / (float)WAVE_MS;             // 0..1 over one wavelength
+  if (!WAVE_CLOCKWISE) phase = -phase;
   for (int i = 0; i < NUM_LEDS; i++) {
-    float behind = CHASE_CLOCKWISE ? head - i : i - head;
-    float d = fmod(behind + NUM_LEDS, (float)NUM_LEDS);       // distance behind the head
-    float f = d < CHASE_TAIL ? 1.0 - d / CHASE_TAIL : 0.0;
-    strip.setPixelColor(i, colorScaled(CHASE_MIN + (CHASE_MAX - CHASE_MIN) * f));
+    float x = (float)WAVE_COUNT * i / NUM_LEDS - phase;
+    float swell = 0.5 + 0.5 * cos(2.0 * PI * x);              // smooth 0..1 ripple
+    strip.setPixelColor(i, colorScaled(WAVE_MIN + (WAVE_MAX - WAVE_MIN) * swell));
   }
 }
 
@@ -172,7 +170,7 @@ void renderFrame() {
   switch (effect) {
     case FX_SOLID:  fxSolid();     break;
     case FX_CANDLE: fxCandle(now); break;
-    case FX_CHASE:  fxChase(now);  break;
+    case FX_WAVE:   fxWave(now);   break;
     default:        fxSolid();     break;
   }
   strip.show();
