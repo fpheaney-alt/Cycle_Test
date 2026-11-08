@@ -15,7 +15,7 @@
 //   +  /  -    nudge sensitivity by 100
 //   r          re-calibrate baseline (don't touch the tape)
 //   c R G B    set lamp colour live, e.g. "c 255 140 40"
-//   e          next lighting effect;  "e candle" or "e 1" picks one;  "e ?" lists them
+//   e          switch effect;  "e candle" or "e chase" picks one
 //   p          pause / resume the readings stream
 
 #include <Adafruit_NeoPixel.h>
@@ -50,10 +50,10 @@ const int   SAMPLES    = 4;             // readings averaged per loop
 const unsigned long PRINT_MS = 100;
 
 // ----------------------- EFFECTS --------------------
-// solid, breathe, twinkle and chase use the colour above (and "c R G B"); candle does too,
-// so try something orange like "c 255 90 10". fire and rainbow use their own colours.
-enum Effect { FX_SOLID, FX_CANDLE, FX_FIRE, FX_BREATHE, FX_RAINBOW, FX_TWINKLE, FX_CHASE, FX_COUNT };
-const char* FX_NAMES[FX_COUNT] = { "solid", "candle", "fire", "breathe", "rainbow", "twinkle", "chase" };
+// Both effects use the colour above (and "c R G B"). For a candle try something orange,
+// e.g. "c 255 90 10".
+enum Effect { FX_CANDLE, FX_CHASE, FX_COUNT };
+const char* FX_NAMES[FX_COUNT] = { "candle", "chase" };
 Effect effect = FX_CANDLE;                      // effect at power-up
 
 const unsigned long FRAME_MS = 25;              // animation frame time (40 fps)
@@ -62,17 +62,14 @@ const unsigned long FRAME_MS = 25;              // animation frame time (40 fps)
 const float CANDLE_MIN         = 0.55;          // dimmest normal flicker (1.0 = full)
 const float CANDLE_GUST_CHANCE = 0.06;          // chance per flicker step of a deep dip
 const float CANDLE_GUST_LEVEL  = 0.30;          // how low a dip goes
-const float CANDLE_SMOOTH      = 0.25;          // 0..1, higher = jumpier
+const unsigned long CANDLE_STEP_MIN_MS = 200;   // time between new brightness targets
+const unsigned long CANDLE_STEP_MAX_MS = 700;   //   (longer = slower flicker)
+const float CANDLE_SMOOTH      = 0.08;          // 0..1, how fast the level chases its target (lower = slower)
 const float CANDLE_PIXEL_SPREAD = 0.10;         // how much each LED varies from the others
+const float CANDLE_PIXEL_FOLLOW = 0.15;         // 0..1, how fast each LED follows (lower = slower shimmer)
 
-// Fire (classic "Fire2012" heat model, wrapped around the ring)
-const int FIRE_COOLING  = 55;                   // higher = shorter, redder flames
-const int FIRE_SPARKING = 120;                  // 0..255, higher = more new flare-ups
-
-// Timing for the slow effects (ms for one full cycle)
-const unsigned long BREATHE_MS = 4000;
-const unsigned long RAINBOW_MS = 8000;
-const unsigned long CHASE_MS   = 1500;
+// Chase
+const unsigned long CHASE_MS   = 4000;          // ms for one full rotation (higher = slower)
 const float         CHASE_TAIL = 6.0;           // tail length in LEDs
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -115,10 +112,6 @@ uint32_t colorScaled(float f) {
   return strip.Color((uint8_t)(colorR * f), (uint8_t)(colorG * f), (uint8_t)(colorB * f));
 }
 
-void fxSolid() {
-  for (int i = 0; i < NUM_LEDS; i++) strip.setPixelColor(i, colorScaled(1.0));
-}
-
 float candleLevel = 0.8, candleTarget = 0.8;
 float pixLevel[NUM_LEDS];
 unsigned long candleNext = 0;
@@ -128,66 +121,16 @@ void fxCandle(unsigned long now) {
     // Pick a new brightness target now and then; occasionally a deep dip, like a draught
     if (random(1000) / 1000.0 < CANDLE_GUST_CHANCE) candleTarget = CANDLE_GUST_LEVEL;
     else candleTarget = CANDLE_MIN + (1.0 - CANDLE_MIN) * (random(1000) / 1000.0);
-    candleNext = now + random(50, 220);
+    candleNext = now + random(CANDLE_STEP_MIN_MS, CANDLE_STEP_MAX_MS);
   }
   candleLevel += (candleTarget - candleLevel) * CANDLE_SMOOTH;
 
   for (int i = 0; i < NUM_LEDS; i++) {
     float want = candleLevel + (random(-1000, 1001) / 1000.0) * CANDLE_PIXEL_SPREAD;
-    pixLevel[i] += (want - pixLevel[i]) * 0.35;
+    pixLevel[i] += (want - pixLevel[i]) * CANDLE_PIXEL_FOLLOW;
     float f = constrain(pixLevel[i], 0.0f, 1.0f);
     // Dimmer flame shifts redder: green and blue fall faster than red
     strip.setPixelColor(i, strip.Color((uint8_t)(colorR * f), (uint8_t)(colorG * f * f), (uint8_t)(colorB * f * f)));
-  }
-}
-
-uint8_t heat[NUM_LEDS];
-
-uint32_t heatColor(uint8_t h) {
-  uint8_t t192 = (uint16_t)h * 191 / 255;
-  uint8_t ramp = (t192 & 0x3F) << 2;
-  if (t192 & 0x80) return strip.Color(255, 255, ramp);
-  if (t192 & 0x40) return strip.Color(255, ramp, 0);
-  return strip.Color(ramp, 0, 0);
-}
-
-void fxFire() {
-  for (int i = 0; i < NUM_LEDS; i++) {                       // cool every cell a little
-    uint8_t cool = random(0, (FIRE_COOLING * 10) / NUM_LEDS + 2);
-    heat[i] = heat[i] > cool ? heat[i] - cool : 0;
-  }
-  uint8_t t[NUM_LEDS];                                       // let heat spread to neighbours
-  for (int i = 0; i < NUM_LEDS; i++)
-    t[i] = (heat[(i + NUM_LEDS - 1) % NUM_LEDS] + heat[i] * 2 + heat[(i + 1) % NUM_LEDS]) / 4;
-  memcpy(heat, t, sizeof(heat));
-  if (random(255) < FIRE_SPARKING) {                         // random new spark
-    int y = random(NUM_LEDS);
-    heat[y] = min(255, heat[y] + (int)random(160, 255));
-  }
-  for (int i = 0; i < NUM_LEDS; i++) strip.setPixelColor(i, heatColor(heat[i]));
-}
-
-void fxBreathe(unsigned long now) {
-  float phase = (now % BREATHE_MS) / (float)BREATHE_MS;
-  float f = 0.12 + 0.88 * (0.5 - 0.5 * cos(2.0 * PI * phase));
-  for (int i = 0; i < NUM_LEDS; i++) strip.setPixelColor(i, colorScaled(f));
-}
-
-void fxRainbow(unsigned long now) {
-  uint32_t base = (uint32_t)((uint64_t)(now % RAINBOW_MS) * 65536 / RAINBOW_MS);
-  for (int i = 0; i < NUM_LEDS; i++) {
-    uint16_t hue = (uint16_t)(base + (uint32_t)i * 65536UL / NUM_LEDS);
-    strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hue)));
-  }
-}
-
-float twinkle[NUM_LEDS];
-
-void fxTwinkle() {
-  if (random(100) < 12) twinkle[random(NUM_LEDS)] = 1.0;      // light a random LED
-  for (int i = 0; i < NUM_LEDS; i++) {
-    twinkle[i] *= 0.90;                                       // fade
-    strip.setPixelColor(i, colorScaled(0.06 + 0.94 * twinkle[i]));
   }
 }
 
@@ -210,14 +153,9 @@ void renderFrame() {
   strip.setBrightness((uint8_t)brightness);   // must come before setPixelColor
   unsigned long now = millis();
   switch (effect) {
-    case FX_SOLID:   fxSolid();        break;
-    case FX_CANDLE:  fxCandle(now);    break;
-    case FX_FIRE:    fxFire();         break;
-    case FX_BREATHE: fxBreathe(now);   break;
-    case FX_RAINBOW: fxRainbow(now);   break;
-    case FX_TWINKLE: fxTwinkle();      break;
-    case FX_CHASE:   fxChase(now);     break;
-    default:         fxSolid();        break;
+    case FX_CANDLE: fxCandle(now); break;
+    case FX_CHASE:  fxChase(now);  break;
+    default:        fxCandle(now); break;
   }
   strip.show();
 }
@@ -352,7 +290,7 @@ void loop() {
   updateTouch(raw);
   updateRamp();
 
-  bool animated = lampOn && effect != FX_SOLID;
+  bool animated = lampOn;
   if (dirty || (animated && millis() - lastRender >= FRAME_MS)) {
     renderFrame();
     lastRender = millis();
