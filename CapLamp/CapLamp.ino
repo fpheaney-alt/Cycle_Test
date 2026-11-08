@@ -68,9 +68,13 @@ const float CANDLE_SMOOTH      = 0.08;          // 0..1, how fast the level chas
 const float CANDLE_PIXEL_SPREAD = 0.10;         // how much each LED varies from the others
 const float CANDLE_PIXEL_FOLLOW = 0.15;         // 0..1, how fast each LED follows (lower = slower shimmer)
 
-// Chase
-const unsigned long CHASE_MS   = 4000;          // ms for one full rotation (higher = slower)
-const float         CHASE_TAIL = 6.0;           // tail length in LEDs
+// Chase - every LED stays lit; the "chase" is a bright spot moving around a dimmer glow
+const unsigned long CHASE_MS    = 4000;         // ms for one full rotation (higher = slower)
+const bool          CHASE_CLOCKWISE = true;     // false = other direction
+const float         CHASE_MIN   = 0.25;         // dimmest LED, 0..1 (keep above 0 so none go dark)
+const float         CHASE_MAX   = 1.0;          // brightest LED (the head), 0..1
+const float         CHASE_TAIL  = 10.0;         // LEDs over which it fades from MAX to MIN
+                                                //   (16 = whole ring is a gradient, small = tight comet)
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -135,11 +139,13 @@ void fxCandle(unsigned long now) {
 }
 
 void fxChase(unsigned long now) {
-  float pos = (now % CHASE_MS) * (float)NUM_LEDS / CHASE_MS;
+  float head = (now % CHASE_MS) * (float)NUM_LEDS / CHASE_MS;
+  if (!CHASE_CLOCKWISE) head = NUM_LEDS - head;
   for (int i = 0; i < NUM_LEDS; i++) {
-    float d = fmod(pos - i + NUM_LEDS, (float)NUM_LEDS);      // distance behind the head
+    float behind = CHASE_CLOCKWISE ? head - i : i - head;
+    float d = fmod(behind + NUM_LEDS, (float)NUM_LEDS);       // distance behind the head
     float f = d < CHASE_TAIL ? 1.0 - d / CHASE_TAIL : 0.0;
-    strip.setPixelColor(i, colorScaled(0.03 + 0.97 * f));
+    strip.setPixelColor(i, colorScaled(CHASE_MIN + (CHASE_MAX - CHASE_MIN) * f));
   }
 }
 
