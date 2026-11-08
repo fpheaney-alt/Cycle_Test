@@ -70,6 +70,8 @@ const unsigned long CANDLE_STEP_MIN_MS = 200;   // time between new brightness t
 const unsigned long CANDLE_STEP_MAX_MS = 700;   //   (longer = slower flicker)
 const float CANDLE_SMOOTH      = 0.08;          // 0..1, how fast the level chases its target (lower = slower)
 const float CANDLE_PIXEL_SPREAD = 0.10;         // how much each LED varies from the others
+const float CANDLE_REDDEN      = 0.30;          // 0..1, how much dimmer moments shift toward red
+                                                //   (0 = colour never changes, 1 = strongly red)
 const float CANDLE_PIXEL_FOLLOW = 0.15;         // 0..1, how fast each LED follows (lower = slower shimmer)
 
 // Wave - brightness ripples smoothly around the ring; every LED stays lit
@@ -143,8 +145,9 @@ void fxCandle(unsigned long now) {
     float want = candleLevel + (random(-1000, 1001) / 1000.0) * CANDLE_PIXEL_SPREAD;
     pixLevel[i] += (want - pixLevel[i]) * CANDLE_PIXEL_FOLLOW;
     float f = constrain(pixLevel[i], 0.0f, 1.0f);
-    // Dimmer flame shifts redder: green and blue fall faster than red
-    strip.setPixelColor(i, strip.Color((uint8_t)(colorR * f), (uint8_t)(colorG * f * f), (uint8_t)(colorB * f * f)));
+    // Dimmer flame can shift redder: green and blue fall faster than red by CANDLE_REDDEN
+    float gb = powf(f, 1.0f + CANDLE_REDDEN);
+    strip.setPixelColor(i, strip.Color((uint8_t)(colorR * f), (uint8_t)(colorG * gb), (uint8_t)(colorB * gb)));
   }
 }
 
