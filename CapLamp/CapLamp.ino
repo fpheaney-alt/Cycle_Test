@@ -8,7 +8,7 @@
 //
 // CONTROLS
 //   Tap                       -> lamp on / off
-//   Double tap                -> next effect (candle <-> chase)
+//   Double tap                -> next effect (solid -> candle -> chase)
 //   Hold (HOLD_MS)            -> brightness ramps while held; direction alternates each hold
 //
 // SERIAL MONITOR (115200 baud) - readings stream every PRINT_MS
@@ -16,7 +16,7 @@
 //   +  /  -    nudge sensitivity by 100
 //   r          re-calibrate baseline (don't touch the tape)
 //   c R G B    set lamp colour live, e.g. "c 255 140 40"
-//   e          switch effect;  "e candle" or "e chase" picks one
+//   e          switch effect;  "e solid", "e candle" or "e chase" picks one
 //   p          pause / resume the readings stream
 
 #include <Adafruit_NeoPixel.h>
@@ -54,10 +54,10 @@ const int   SAMPLES    = 4;             // readings averaged per loop
 const unsigned long PRINT_MS = 100;
 
 // ----------------------- EFFECTS --------------------
-// Both effects use the colour above (and "c R G B"). For a candle try something orange,
+// All effects use the colour above (and "c R G B"). For a candle try something orange,
 // e.g. "c 255 90 10".
-enum Effect { FX_CANDLE, FX_CHASE, FX_COUNT };
-const char* FX_NAMES[FX_COUNT] = { "candle", "chase" };
+enum Effect { FX_SOLID, FX_CANDLE, FX_CHASE, FX_COUNT };
+const char* FX_NAMES[FX_COUNT] = { "solid", "candle", "chase" };
 Effect effect = FX_CANDLE;                      // effect at power-up
 
 const unsigned long FRAME_MS = 25;              // animation frame time (40 fps)
@@ -123,6 +123,10 @@ uint32_t colorScaled(float f) {
   return strip.Color((uint8_t)(colorR * f), (uint8_t)(colorG * f), (uint8_t)(colorB * f));
 }
 
+void fxSolid() {
+  for (int i = 0; i < NUM_LEDS; i++) strip.setPixelColor(i, colorScaled(1.0));
+}
+
 float candleLevel = 0.8, candleTarget = 0.8;
 float pixLevel[NUM_LEDS];
 unsigned long candleNext = 0;
@@ -166,9 +170,10 @@ void renderFrame() {
   strip.setBrightness((uint8_t)brightness);   // must come before setPixelColor
   unsigned long now = millis();
   switch (effect) {
+    case FX_SOLID:  fxSolid();     break;
     case FX_CANDLE: fxCandle(now); break;
     case FX_CHASE:  fxChase(now);  break;
-    default:        fxCandle(now); break;
+    default:        fxSolid();     break;
   }
   strip.show();
 }
@@ -324,7 +329,7 @@ void loop() {
   updateTouch(raw);
   updateRamp();
 
-  bool animated = lampOn;
+  bool animated = lampOn && effect != FX_SOLID;   // solid only redraws when something changes
   if (dirty || (animated && millis() - lastRender >= FRAME_MS)) {
     renderFrame();
     lastRender = millis();
