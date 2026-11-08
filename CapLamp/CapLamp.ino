@@ -8,6 +8,7 @@
 //
 // CONTROLS
 //   Tap                       -> lamp on / off
+//   Double tap                -> next effect (candle <-> chase)
 //   Hold (HOLD_MS)            -> brightness ramps while held; direction alternates each hold
 //
 // SERIAL MONITOR (115200 baud) - readings stream every PRINT_MS
@@ -39,6 +40,9 @@ float brightness = 100;             // starting brightness
 // ----------------------- BUTTON TIMING --------------------
 const unsigned long HOLD_MS    = 600;   // press length that counts as a "hold" instead of a tap
 const unsigned long MIN_TAP_MS = 30;    // ignore touches shorter than this (noise)
+const unsigned long DOUBLE_TAP_MS = 350; // max gap between two taps for a double tap (0 = disable
+                                         //   double tap; a single tap then acts instantly instead
+                                         //   of after this delay)
 
 // ----------------------- TOUCH SENSITIVITY --------------------
 // On the ESP32-S3 the raw reading goes UP when touched. A touch is detected when
@@ -85,6 +89,9 @@ bool  lampOn = false;
 bool  lastRampUp = false;       // first hold goes brighter
 bool  rampingUp = true;
 bool  holding = false;          // a hold is in progress (ramping)
+bool  pendingTap = false;       // a tap happened; waiting to see if it's a double tap
+bool  secondPress = false;      // the current press began inside the double-tap window
+unsigned long tapReleased = 0;
 unsigned long pressStart = 0;
 unsigned long lastFrame = 0;
 unsigned long lastPrint = 0;
@@ -191,6 +198,15 @@ void setEffect(const String &arg) {
 void updateTouch(uint32_t raw) {
   float onThresh  = baseline + touchDelta;
   float offThresh = baseline + touchDelta * HYSTERESIS;
+  unsigned long now = millis();
+
+  // A single tap waits DOUBLE_TAP_MS in case a second tap follows; if none does, it counts now
+  if (pendingTap && !touched && now - tapReleased >= DOUBLE_TAP_MS) {
+    pendingTap = false;
+    lampOn = !lampOn;
+    dirty = true;
+  }
+
   bool wasTouched = touched;
 
   if (!touched && raw > onThresh) touched = true;
@@ -199,16 +215,16 @@ void updateTouch(uint32_t raw) {
   // Let the baseline slowly follow drift while nobody is touching
   if (!touched && raw < offThresh) baseline += ((float)raw - baseline) * 0.01;
 
-  unsigned long now = millis();
-
   if (touched && !wasTouched) {            // press started
     pressStart = now;
     holding = false;
+    secondPress = pendingTap;              // follows a tap within the double-tap window
   }
 
   if (touched && !holding && lampOn && now - pressStart >= HOLD_MS) {
     holding = true;                        // hold begins: pick direction (opposite of last time)
     rampingUp = !lastRampUp;
+    pendingTap = false;                    // a tap followed by a hold is just a hold
   }
 
   if (!touched && wasTouched) {            // released
@@ -217,12 +233,24 @@ void updateTouch(uint32_t raw) {
       lastRampUp = rampingUp;
       holding = false;
     } else if (dur >= MIN_TAP_MS && dur < HOLD_MS) {
-      lampOn = !lampOn;                    // tap toggles
-      dirty = true;
+      if (DOUBLE_TAP_MS == 0) {            // double-tap off: tap acts immediately
+        lampOn = !lampOn;
+        dirty = true;
+      } else if (secondPress) {            // double tap: next effect (and light up if off)
+        pendingTap = false;
+        setEffect("");
+        lampOn = true;
+        dirty = true;
+      } else {                             // first tap: wait to see if a second follows
+        pendingTap = true;
+        tapReleased = now;
+      }
     } else if (!lampOn && dur >= HOLD_MS) {
       lampOn = true;                       // holding while off just turns it on
+      pendingTap = false;
       dirty = true;
     }
+    secondPress = false;
   }
 }
 
